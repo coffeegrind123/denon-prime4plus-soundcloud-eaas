@@ -34,6 +34,10 @@ type BeaconConfiguration struct {
 	// recommended to leave this empty.
 	GRPCHost string
 
+	// The local IPv4 address to use as the source address of discovery replies.
+	// Leave empty to let the kernel select it.
+	SourceHost string
+
 	// The port to report back to clients which the EAAS gRPC API is listening on.
 	//
 	// If left zero, defaults to the default EAAS gRPC API port (50010).

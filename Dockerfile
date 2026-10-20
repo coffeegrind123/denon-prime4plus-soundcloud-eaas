@@ -8,6 +8,8 @@ COPY . .
 
 WORKDIR /src
 RUN go mod download
+RUN go test ./...
+RUN go vet ./...
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/soundcloud-eaas .
 
 FROM alpine:3.24

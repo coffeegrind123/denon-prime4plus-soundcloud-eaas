@@ -37,7 +37,7 @@ type source struct {
 	profile    string
 	display    string
 	hostIP     string
-	cacheDir   string
+	cache      *cacheManager
 	feedMax    int
 	httpClient *http.Client
 	user       sc.User
@@ -52,17 +52,21 @@ type source struct {
 	streamLocks    map[string]*sync.Mutex
 }
 
-func newSource(profile, display, hostIP, cacheDir string, feedMax int) (*source, error) {
+func newSource(profile, display, hostIP, cacheDir string, feedMax int, cacheMax, cacheMin int64) (*source, error) {
 	user, err := sc.GetUser(profile)
 	if err != nil {
 		return nil, fmt.Errorf("resolve user: %w", err)
+	}
+	cache, err := newCacheManager(cacheDir, cacheMax, cacheMin)
+	if err != nil {
+		return nil, fmt.Errorf("cache setup: %w", err)
 	}
 
 	s := &source{
 		profile:        profile,
 		display:        display,
 		hostIP:         hostIP,
-		cacheDir:       cacheDir,
+		cache:          cache,
 		feedMax:        feedMax,
 		httpClient:     &http.Client{},
 		user:           user,
@@ -488,13 +492,13 @@ func (s *source) SearchTracks(req *enginelibrary.SearchTracksRequest, stream grp
 	return s.streamSearchTracks(stream, tracks)
 }
 
-func (s *source) GetTrack(_ context.Context, req *enginelibrary.GetTrackRequest) (*enginelibrary.GetTrackResponse, error) {
+func (s *source) GetTrack(ctx context.Context, req *enginelibrary.GetTrackRequest) (*enginelibrary.GetTrackResponse, error) {
 	log.Printf("GetTrack library=%q track=%q", req.GetLibraryId(), req.GetTrackId())
 	track, err := s.track(req.GetTrackId())
 	if err != nil {
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
-	size, extension, err := s.prepareTrack(string(track.ID))
+	size, extension, err := s.prepareTrack(ctx, string(track.ID))
 	if err != nil {
 		log.Printf("GetTrack prepare %s: %v", track.ID, err)
 		return nil, status.Error(codes.Unavailable, "track stream unavailable")

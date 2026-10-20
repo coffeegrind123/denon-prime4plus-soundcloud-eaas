@@ -14,6 +14,35 @@ grpc://<HOST_LAN_IP>:50010
 Publishing UDP 11224 and TCP 50010/50020 through Docker worked; host-network
 UDP was blocked by the development host's firewall.
 
+## On-player deployment
+
+The source was also run directly on the player:
+
+```text
+source alias: 192.168.4.90/32 on wlan0
+gRPC:         192.168.4.90:50010
+HTTP:         192.168.4.90:50020
+cache:        /data/prime4-app/cache
+binary:       static ARMv7
+service user: soundcloud-eaas
+```
+
+The reply packet source address was set to the alias. Engine then completed
+`CreateTrust`, `GetLibrary`, and `GetTracks`. An alias on `lo` and alternate
+gRPC ports 50110/50120 appeared in the picker but failed activation.
+
+The UI loaded `Likes`, displayed artwork and metadata, and double-tapping a row
+opened the Load Track deck selector. Loading the first track caused `GetTrack`
+and a local `/download` request without an Engine format error.
+
+The cache contained one numeric fragmented MP4 file after the first load.
+`/data` remained at 5.4 GiB free. The HTTP endpoint rejected a non-local test
+client with 403.
+
+The service persisted across boot and was started by the `/data` boot hook after
+network readiness. The binary, service unit, and boot helper hashes matched a
+fresh ARMv7 build from the repository.
+
 ## Library
 
 The hardware source list displayed:

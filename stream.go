@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"git.maid.zone/stuff/soundcloak/lib/cfg"
@@ -53,7 +55,7 @@ func (s *source) handleDownload(w http.ResponseWriter, r *http.Request) {
 	requested = strings.ReplaceAll(requested, "\\", "/")
 	base := path.Base(requested)
 	id := strings.TrimSuffix(base, path.Ext(base))
-	if id == "" || id == "." || id == "/" {
+	if !isNumericTrackID(id) {
 		http.Error(w, "missing track id", http.StatusBadRequest)
 		return
 	}
@@ -67,26 +69,26 @@ func (s *source) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if stream.protocol == sc.ProtocolProgressive {
-		file, err := s.materializeProgressive(id, stream)
+		file, err := s.materializeProgressive(r.Context(), id, stream)
 		if err != nil {
 			log.Printf("materialize progressive %s: %v", id, err)
 			http.Error(w, "stream unavailable", http.StatusBadGateway)
 			return
 		}
-		http.ServeFile(w, r, file)
+		serveCachedMedia(w, r, file)
 		return
 	}
 
-	file, err := s.materializeHLS(id, stream)
+	file, err := s.materializeHLS(r.Context(), id, stream)
 	if err != nil {
 		log.Printf("materialize HLS %s: %v", id, err)
 		http.Error(w, "stream unavailable", http.StatusBadGateway)
 		return
 	}
-	http.ServeFile(w, r, file)
+	serveCachedMedia(w, r, file)
 }
 
-func (s *source) prepareTrack(id string) (uint32, string, error) {
+func (s *source) prepareTrack(ctx context.Context, id string) (uint32, string, error) {
 	stream, err := s.resolveStream(id)
 	if err != nil {
 		return 0, "", err
@@ -99,55 +101,27 @@ func (s *source) prepareTrack(id string) (uint32, string, error) {
 			extension = "m4a"
 		}
 	}
+	var file *os.File
 	if stream.protocol == sc.ProtocolProgressive {
-		info, err := s.progressiveSize(stream.url)
-		if err == nil && info > 0 {
-			return info, extension, nil
-		}
-		file, err := s.materializeProgressive(id, stream)
-		if err != nil {
-			return 0, "", err
-		}
-		stat, err := os.Stat(file)
-		if err != nil {
-			return 0, "", err
-		}
-		return uint32(stat.Size()), extension, nil
+		file, err = s.materializeProgressive(ctx, id, stream)
+	} else {
+		file, err = s.materializeHLS(ctx, id, stream)
 	}
-
-	file, err := s.materializeHLS(id, stream)
 	if err != nil {
 		return 0, "", err
 	}
-	stat, err := os.Stat(file)
+	defer file.Close()
+	stat, err := file.Stat()
 	if err != nil {
 		return 0, "", err
+	}
+	if stat.Size() <= 0 || stat.Size() > int64(^uint32(0)) {
+		return 0, "", fmt.Errorf("invalid cached media size %d", stat.Size())
 	}
 	return uint32(stat.Size()), extension, nil
 }
 
-func (s *source) progressiveSize(target string) (uint32, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodHead, target, nil)
-	if err != nil {
-		return 0, err
-	}
-	response, err := s.httpClient.Do(request)
-	if err != nil {
-		return 0, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 400 {
-		return 0, fmt.Errorf("HEAD status %d", response.StatusCode)
-	}
-	if response.ContentLength <= 0 || response.ContentLength > int64(^uint32(0)) {
-		return 0, fmt.Errorf("invalid content length")
-	}
-	return uint32(response.ContentLength), nil
-}
-
-func (s *source) materializeProgressive(id string, stream resolvedStream) (string, error) {
+func (s *source) materializeProgressive(ctx context.Context, id string, stream resolvedStream) (*os.File, error) {
 	lock := s.streamLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -156,37 +130,51 @@ func (s *source) materializeProgressive(id string, stream resolvedStream) (strin
 	if extension == "" {
 		extension = "mp3"
 	}
-	destination := filepath.Join(s.cacheDir, id+"."+extension)
-	if info, err := os.Stat(destination); err == nil && info.Size() > 0 {
-		return destination, nil
+	destination := filepath.Join(s.cache.dir, id+"."+extension)
+
+	if err := s.cache.beginDownload(ctx); err != nil {
+		return nil, err
+	}
+	defer s.cache.endDownload()
+
+	if file, ok, err := s.openCachedMedia(destination); ok || err != nil {
+		return file, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	temporary := destination + ".part"
 	output, err := os.Create(temporary)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if err := s.copyURL(ctx, output, stream.url); err != nil {
+	if _, err := s.copyURLLimited(ctx, output, stream.url, s.cache.maxBytes); err != nil {
 		_ = output.Close()
 		_ = os.Remove(temporary)
-		return "", err
+		return nil, err
 	}
 	if err := output.Sync(); err != nil {
 		_ = output.Close()
 		_ = os.Remove(temporary)
-		return "", err
+		return nil, err
 	}
 	if err := output.Close(); err != nil {
 		_ = os.Remove(temporary)
-		return "", err
+		return nil, err
 	}
 	if err := os.Rename(temporary, destination); err != nil {
-		return "", err
+		_ = os.Remove(temporary)
+		return nil, err
 	}
 	log.Printf("cached progressive track %s (%s)", id, destination)
-	return destination, nil
+	file, ok, err := s.openCachedMedia(destination)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("cached progressive file disappeared")
+	}
+	return file, nil
 }
 
 func (s *source) resolveStream(id string) (resolvedStream, error) {
@@ -216,7 +204,7 @@ func (s *source) resolveStream(id string) (resolvedStream, error) {
 	}, nil
 }
 
-func (s *source) materializeHLS(id string, stream resolvedStream) (string, error) {
+func (s *source) materializeHLS(ctx context.Context, id string, stream resolvedStream) (*os.File, error) {
 	lock := s.streamLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -225,56 +213,114 @@ func (s *source) materializeHLS(id string, stream resolvedStream) (string, error
 	if extension == "" {
 		extension = "m4a"
 	}
-	destination := filepath.Join(s.cacheDir, id+"."+extension)
-	if info, err := os.Stat(destination); err == nil && info.Size() > 0 {
-		return destination, nil
+	destination := filepath.Join(s.cache.dir, id+"."+extension)
+
+	if err := s.cache.beginDownload(ctx); err != nil {
+		return nil, err
+	}
+	defer s.cache.endDownload()
+
+	if file, ok, err := s.openCachedMedia(destination); ok || err != nil {
+		return file, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	playlist, err := s.fetch(ctx, stream.url)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	parser := newHLSPlaylist(stream.url)
 	if err := parser.parse(playlist); err != nil {
-		_ = os.Remove(destination + ".part")
-		return "", err
+		return nil, err
 	}
 
 	temporary := destination + ".part"
 	output, err := os.Create(temporary)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer output.Close()
+	var written int64
 
 	if parser.initialization != "" {
-		if err := s.copyURL(ctx, output, parser.initialization); err != nil {
+		n, err := s.copyURLLimited(ctx, output, parser.initialization, s.cache.maxBytes)
+		written += n
+		if err != nil {
 			_ = os.Remove(temporary)
-			return "", err
+			return nil, err
 		}
 	}
 	for _, segment := range parser.segments {
-		if err := s.copyURL(ctx, output, segment); err != nil {
+		n, err := s.copyURLLimited(ctx, output, segment, s.cache.maxBytes)
+		written += n
+		if err != nil {
 			_ = os.Remove(temporary)
-			return "", err
+			return nil, err
 		}
+	}
+	if written == 0 {
+		_ = os.Remove(temporary)
+		return nil, fmt.Errorf("HLS media is empty")
 	}
 	if err := output.Sync(); err != nil {
 		_ = os.Remove(temporary)
-		return "", err
+		return nil, err
 	}
 	if err := output.Close(); err != nil {
 		_ = os.Remove(temporary)
-		return "", err
+		return nil, err
 	}
 	if err := os.Rename(temporary, destination); err != nil {
-		return "", err
+		_ = os.Remove(temporary)
+		return nil, err
 	}
 	log.Printf("cached HLS track %s (%s)", id, destination)
-	return destination, nil
+	file, ok, err := s.openCachedMedia(destination)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("cached HLS file disappeared")
+	}
+	return file, nil
+}
+
+func (s *source) openCachedMedia(path string) (*os.File, bool, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if errors.Is(err, syscall.ENOENT) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, false, fmt.Errorf("cached media is not a regular file")
+	}
+	if info.Size() <= 0 || info.Size() > s.cache.maxBytes {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, false, nil
+	}
+	return file, true, nil
+}
+
+func serveCachedMedia(w http.ResponseWriter, r *http.Request, file *os.File) {
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		http.Error(w, "cached media unavailable", http.StatusInternalServerError)
+		return
+	}
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
 func (s *source) streamLock(id string) *sync.Mutex {
@@ -301,24 +347,98 @@ func (s *source) fetch(ctx context.Context, target string) ([]byte, error) {
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("upstream status %d", response.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	const maxPlaylistBytes = 4 << 20
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxPlaylistBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxPlaylistBytes {
+		return nil, fmt.Errorf("playlist exceeds %d bytes", maxPlaylistBytes)
+	}
+	return data, nil
 }
 
-func (s *source) copyURL(ctx context.Context, output io.Writer, target string) error {
+func (s *source) copyURLLimited(ctx context.Context, output io.Writer, target string, limit int64) (int64, error) {
+	if limit <= 0 {
+		return 0, errCacheLimit
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	response, err := s.httpClient.Do(request)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("segment %s: status %d", target, response.StatusCode)
+	if response.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("segment %s: status %d", target, response.StatusCode)
 	}
-	_, err = io.Copy(output, response.Body)
-	return err
+	if response.ContentLength == 0 {
+		return 0, fmt.Errorf("segment %s is empty", target)
+	}
+	if response.ContentLength > 0 {
+		if err := s.cache.ensure(response.ContentLength); err != nil {
+			return 0, err
+		}
+	}
+	remainingBudget, err := s.cache.remainingBudget()
+	if err != nil {
+		return 0, err
+	}
+	if remainingBudget < limit {
+		limit = remainingBudget
+	}
+
+	buffer := make([]byte, 64<<10)
+	var written int64
+	for {
+		readSize := len(buffer)
+		if remaining := limit - written; remaining < int64(readSize) {
+			readSize = int(remaining) + 1
+		}
+		n, readErr := response.Body.Read(buffer[:readSize])
+		if n > 0 {
+			next := written + int64(n)
+			if next > limit {
+				return next, fmt.Errorf("%w: media exceeds remaining capacity", errCacheLimit)
+			}
+			available, err := freeBytes(s.cache.dir)
+			if err != nil {
+				return next, err
+			}
+			if available < s.cache.minFreeBytes || int64(n) > available-s.cache.minFreeBytes {
+				return next, fmt.Errorf("%w: free=%d minimum=%d", errCacheLimit, available, s.cache.minFreeBytes)
+			}
+			if err := writeAll(output, buffer[:n]); err != nil {
+				return next, err
+			}
+			written = next
+		}
+		if errors.Is(readErr, io.EOF) {
+			if written == 0 {
+				return 0, fmt.Errorf("segment %s is empty", target)
+			}
+			return written, nil
+		}
+		if readErr != nil {
+			return written, readErr
+		}
+	}
+}
+
+func writeAll(output io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := output.Write(data)
+		data = data[n:]
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }
 
 type hlsPlaylist struct {
@@ -337,11 +457,20 @@ func (p *hlsPlaylist) parse(data []byte) error {
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "#EXT-X-STREAM-INF:") || strings.HasPrefix(line, "#EXT-X-MEDIA:") {
+			return fmt.Errorf("master HLS playlist is unsupported")
+		}
+		if strings.HasPrefix(line, "#EXT-X-BYTERANGE:") {
+			return fmt.Errorf("byte-range HLS playlist is unsupported")
+		}
 		if strings.HasPrefix(line, "#EXT-X-KEY:") &&
 			!strings.Contains(strings.ToUpper(line), "METHOD=NONE") {
 			return fmt.Errorf("encrypted HLS playlist")
 		}
 		if strings.HasPrefix(line, "#EXT-X-MAP:") {
+			if attribute(line, "BYTERANGE") != "" {
+				return fmt.Errorf("byte-range HLS initialization is unsupported")
+			}
 			if value := attribute(line, "URI"); value != "" {
 				p.initialization = p.resolve(value)
 			}

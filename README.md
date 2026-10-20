@@ -27,10 +27,10 @@ work, but are not verified.
 - Root access to install a service and write under `/data`
 - ARMv7 build of the `soundcloud-eaas` binary
 - Working systemd
-- Free TCP ports `50010` and `50020`, plus UDP `11224`
+- Free TCP ports `50010` and `50020` on the source address, plus shared UDP `11224`
 - Outbound HTTPS access to SoundCloud and its media CDN
 - Valid CA certificates
-- Enough space for the stream cache; starts near zero and grows per track
+- At least 1 GiB free under the cache filesystem
 
 The source does not need exclusive access to Engine's audio device. Engine
 loads the HTTP stream through its normal EaaS playback path.
@@ -40,7 +40,13 @@ loads the HTTP stream through its normal EaaS playback path.
 ```text
 SC_PROFILE=<public-profile-permalink>
 SC_EAAS_HOST_IP=<player-or-source-lan-ip>
+SC_LOCAL_IP=<local-source-alias>
+SC_LOCAL_IF=wlan0
 SC_MAX_FEED_ITEMS=200
+SC_GRPC_PORT=50010
+SC_HTTP_PORT=50020
+SC_CACHE_MAX_BYTES=536870912
+SC_CACHE_MIN_FREE_BYTES=1073741824
 ```
 
 `SC_PROFILE` is required. There is no default account.
@@ -48,6 +54,16 @@ SC_MAX_FEED_ITEMS=200
 When running directly on the player, use the player's LAN address for
 `SC_EAAS_HOST_IP` so the EaaS discovery response advertises the correct gRPC
 endpoint.
+
+Use a dedicated source alias such as `192.168.4.90` for both
+`SC_EAAS_HOST_IP` and `SC_LOCAL_IP` so the beacon reply originates from a
+distinct EaaS address. `SC_LOCAL_IF` names the LAN interface that owns the alias.
+The systemd unit creates the address before startup. Engine already owns TCP
+`50010` on the primary LAN address and `127.0.0.1`; the source binds the same
+standard ports only on the alias. UDP `11224` is shared through `SO_REUSEPORT`.
+
+The cache quota is 512 MiB by default and cannot be configured above 2 GiB.
+The free-space floor is 1 GiB and cannot be configured lower.
 
 ### Build host
 
@@ -75,12 +91,38 @@ $EDITOR deploy/soundcloud-eaas.env
 ssh root@<player> 'mkdir -p /data/prime4-app/bin /data/prime4-app/cache'
 scp build/soundcloud-eaas-armv7 root@<player>:/data/prime4-app/bin/soundcloud-eaas
 scp deploy/soundcloud-eaas.env root@<player>:/data/prime4-app/soundcloud-eaas.env
+scp deploy/boot-start.sh root@<player>:/data/prime4-app/boot-start.sh
 scp deploy/soundcloud-eaas.service root@<player>:/etc/systemd/system/
-ssh root@<player> 'chmod 755 /data/prime4-app/bin/soundcloud-eaas && \
+ssh root@<player> 'if ! grep -q "^soundcloud-eaas:" /etc/group; then \
+    addgroup -S soundcloud-eaas; \
+  fi && \
+  if ! grep -q "^soundcloud-eaas:" /etc/passwd; then \
+    adduser -S -D -H -G soundcloud-eaas \
+      -s /sbin/nologin -h /nonexistent soundcloud-eaas; \
+  fi && \
+  chown -R soundcloud-eaas:soundcloud-eaas /data/prime4-app/cache && \
+  chmod 755 /data/prime4-app/bin/soundcloud-eaas && \
+  chmod 755 /data/prime4-app/boot-start.sh && \
   chmod 600 /data/prime4-app/soundcloud-eaas.env && \
   systemctl daemon-reload && \
   systemctl enable --now soundcloud-eaas'
 ```
+
+This firmware does not activate new `multi-user.target.wants` entries from the
+late `/etc` overlay at boot. Add this idempotent hook to the existing
+`/data/payload/activate.sh`:
+
+```sh
+if [ -x /data/prime4-app/boot-start.sh ]; then
+    /data/prime4-app/boot-start.sh >>/data/prime4-app/boot-start.log 2>&1 &
+fi
+```
+
+Insert that block immediately before the final `exit 0` in `activate.sh`.
+The hook runs from `/data` after boot, waits for a default route plus outbound
+connectivity, then starts the enabled service. This avoids adding the source
+alias while Wi-Fi is still completing DHCP. `/run` guards it to one attempt per
+boot.
 
 If the source tile does not appear immediately, reopen the Source screen or
 restart `engine.service`.
@@ -89,7 +131,7 @@ restart `engine.service`.
 
 ```sh
 ssh root@<player> 'systemctl status soundcloud-eaas --no-pager'
-ssh root@<player> 'curl http://127.0.0.1:50020/ping'
+ssh root@<player> 'wget -qO- http://<source-alias>:50020/ping'
 ```
 
 The Engine source appears as `SoundCloud · <profile>` and exposes:
@@ -101,6 +143,40 @@ The Engine source appears as `SoundCloud · <profile>` and exposes:
 
 The first play of an HLS-only track may take several seconds while the source
 downloads and concatenates the media segments. Repeated plays use the cache.
+
+## Stream cache
+
+The cache starts empty. Each track is added only when Engine prepares or plays
+it, so disk use grows one media file at a time. A typical 128 kbit/s track uses
+roughly 5 MiB per five minutes. The default 512 MiB quota therefore holds
+roughly 100 tracks, depending on their length and bitrate.
+
+Cache files are media only. The directory does not contain SoundCloud
+credentials, cookies, or account tokens. It is safe to stop the service and
+delete `/data/prime4-app/cache`; the next play will recreate the needed file.
+
+The source enforces three independent limits:
+
+- It writes no more than the 512 MiB cache quota in total.
+- It stops if writing would leave less than 1 GiB free on the filesystem.
+- It deletes the oldest completed track files first when either limit is
+  reached.
+
+Only numeric track files with `.m4a`, `.mp3`, `.mp4`, or `.aac` extensions are
+managed. Unrelated files in the cache directory are never deleted. Interrupted
+`.part` downloads are removed at startup.
+
+Before a download starts, the source calculates a hard byte budget from both
+the quota and current free space. It also checks free space while copying and
+aborts the download before crossing the floor. Partial files are removed on
+abort. Downloads are serialized, so concurrent Engine requests cannot each
+consume the full quota.
+
+If the quota cannot be satisfied even after eviction, the track is reported as
+unavailable rather than continuing to write. If the filesystem is already
+below the 1 GiB floor at startup, the service exits and enters its systemd
+restart limit. Engine remains usable; the storage safety check fails closed
+instead of filling `/data`.
 
 ## How it works
 

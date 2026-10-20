@@ -1,20 +1,46 @@
 [Unit]
 Description=SoundCloud EaaS source for Engine OS
-After=network-online.target
+After=network-online.target data.mount
 Wants=network-online.target
+RequiresMountsFor=/data/prime4-app
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 EnvironmentFile=/data/prime4-app/soundcloud-eaas.env
+User=soundcloud-eaas
+Group=soundcloud-eaas
+ExecStartPre=+/bin/sh -c 'if [ -n "${SC_LOCAL_IP}" ]; then /sbin/ip addr replace "${SC_LOCAL_IP}/32" dev "${SC_LOCAL_IF}"; fi'
 ExecStart=/data/prime4-app/bin/soundcloud-eaas \
     --user ${SC_PROFILE} \
     --host-ip ${SC_EAAS_HOST_IP} \
+    --local-ip ${SC_LOCAL_IP} \
     --cache /data/prime4-app/cache \
-    --max-feed-items ${SC_MAX_FEED_ITEMS}
-Restart=on-failure
+    --max-feed-items ${SC_MAX_FEED_ITEMS} \
+    --grpc-port ${SC_GRPC_PORT} \
+    --http-port ${SC_HTTP_PORT} \
+    --cache-max-bytes ${SC_CACHE_MAX_BYTES} \
+    --cache-min-free-bytes ${SC_CACHE_MIN_FREE_BYTES}
+Restart=always
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/data/prime4-app/cache
+CapabilityBoundingSet=
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+LockPersonality=true
+UMask=0027
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=4096
 
 [Install]
 WantedBy=multi-user.target

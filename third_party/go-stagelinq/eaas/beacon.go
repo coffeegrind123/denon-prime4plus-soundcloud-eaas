@@ -23,6 +23,7 @@ type Beacon struct {
 	token             Token
 	grpcHost          string
 	grpcPort          uint16
+	sourceHost        net.IP
 	shutdownWaitGroup sync.WaitGroup
 }
 
@@ -146,6 +147,12 @@ func (l *Beacon) replyIPv4(controlMessage *ipv4.ControlMessage, srcAddr net.Addr
 			IfIndex: controlMessage.IfIndex,
 		}
 	}
+	if l.sourceHost != nil {
+		if replyControlMessage == nil {
+			replyControlMessage = &ipv4.ControlMessage{}
+		}
+		replyControlMessage.Src = l.sourceHost
+	}
 	if _, err := l.packetConn4.WriteTo(b.Bytes(), replyControlMessage, srcAddr); err != nil {
 		return err
 	}
@@ -197,6 +204,14 @@ func StartBeaconWithConfiguration(beaconConfig *BeaconConfiguration) (beacon *Be
 		grpcPort = DefaultEAASGRPCPort
 	}
 
+	var sourceHost net.IP
+	if beaconConfig.SourceHost != "" {
+		sourceHost = net.ParseIP(beaconConfig.SourceHost)
+		if sourceHost == nil || sourceHost.To4() == nil {
+			return nil, fmt.Errorf("invalid beacon source host %q", beaconConfig.SourceHost)
+		}
+	}
+
 	config := &net.ListenConfig{
 		Control: socket.SetSocketControlForReusePort,
 	}
@@ -235,6 +250,7 @@ func StartBeaconWithConfiguration(beaconConfig *BeaconConfiguration) (beacon *Be
 		token:           token,
 		grpcHost:        beaconConfig.GRPCHost,
 		grpcPort:        grpcPort,
+		sourceHost:      sourceHost,
 	}
 	go b.listen()
 

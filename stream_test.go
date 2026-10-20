@@ -38,6 +38,20 @@ func TestHLSPlaylistRejectsEncryption(t *testing.T) {
 	}
 }
 
+func TestHLSPlaylistRejectsMasterAndByteRanges(t *testing.T) {
+	tests := []string{
+		"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=128000\nstream.m3u8\n",
+		"#EXTM3U\n#EXT-X-BYTERANGE:100@0\nsegment.m4s\n",
+		"#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\",BYTERANGE=\"100@0\"\n#EXTINF:2,\nsegment.m4s\n",
+	}
+	for _, playlist := range tests {
+		parser := newHLSPlaylist("https://cdn.example.test/master.m3u8")
+		if err := parser.parse([]byte(playlist)); err == nil {
+			t.Fatalf("expected playlist rejection: %q", playlist)
+		}
+	}
+}
+
 func TestAttribute(t *testing.T) {
 	line := `#EXT-X-MAP:URI="init.mp4",BYTERANGE="720@0"`
 	if got := attribute(line, "URI"); got != "init.mp4" {
