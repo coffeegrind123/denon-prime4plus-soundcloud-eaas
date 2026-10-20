@@ -4,8 +4,8 @@ Verified against Engine OS 4.3.4 on a Denon Prime 4+.
 
 ## Discovery
 
-The source replied to `EAAS 01 00` over UDP 11224 with a 120-byte
-`EAAS 01 01` response advertising:
+The source replied to `EAAS 01 00` over UDP 11224 with an `EAAS 01 01`
+response advertising:
 
 ```text
 grpc://<HOST_LAN_IP>:50010
@@ -29,7 +29,7 @@ service user: soundcloud-eaas
 
 The reply packet source address was set to the alias. Engine then completed
 `CreateTrust`, `GetLibrary`, and `GetTracks`. An alias on `lo` and alternate
-gRPC ports 50110/50120 appeared in the picker but failed activation.
+gRPC/HTTP ports 50110/50120 appeared in the picker but failed activation.
 
 The UI loaded `Likes`, displayed artwork and metadata, and double-tapping a row
 opened the Load Track deck selector. Loading the first track caused `GetTrack`
@@ -85,14 +85,14 @@ Resolved public HLS track:
 track=<track-id>
 protocol=hls
 preset=aac_160k
-cache=/var/cache/soundcloud-eaas/<track-id>.m4a
-size=8949952
+cache=/data/prime4-app/cache/<track-id>.m4a
+size=4064344
 ```
 
 HTTP request:
 
 ```text
-GET /download/<C:\SoundCloud\<track-id>>
+GET /download/<C:\SoundCloud\<track-id>.m4a>
 Range: bytes=0-1023
 ```
 
@@ -101,7 +101,7 @@ Response:
 ```text
 206 Partial Content
 Content-Length: 1024
-Content-Range: bytes 0-1023/8949952
+Content-Range: bytes 0-1023/4064344
 Content-Type: audio/mp4
 Accept-Ranges: bytes
 ```

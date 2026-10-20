@@ -81,9 +81,18 @@ func newSource(profile, display, hostIP, cacheDir string, feedMax int, cacheMax,
 	if err != nil {
 		log.Printf("load user playlists: %v", err)
 	} else {
-		for _, playlist := range playlists.Collection {
-			s.cachePlaylist(*playlist)
-			s.playlistOrder = append(s.playlistOrder, playlist.Permalink)
+		for {
+			for _, playlist := range playlists.Collection {
+				s.cachePlaylist(*playlist)
+				s.playlistOrder = append(s.playlistOrder, playlist.Permalink)
+			}
+			if playlists.NextHref == "" {
+				break
+			}
+			if err := playlists.Proceed(true); err != nil {
+				log.Printf("load user playlists page: %v", err)
+				break
+			}
 		}
 	}
 
@@ -214,13 +223,9 @@ func (s *source) playlistMetadataLocked(playlist sc.Playlist) *enginelibrary.Pla
 }
 
 func (s *source) GetTracks(req *enginelibrary.GetTracksRequest, stream grpc.ServerStreamingServer[enginelibrary.GetTracksResponse]) error {
-	pageSize := int(req.GetPageSize())
-	if pageSize <= 0 || pageSize > 200 {
-		pageSize = 50
-	}
 	limit := s.feedMax
-	if limit < pageSize {
-		limit = pageSize
+	if limit <= 0 || limit > 200 {
+		limit = 200
 	}
 
 	tracks, err := s.fetchPlaylistTracks(req.GetPlaylistId(), limit)
@@ -447,7 +452,8 @@ func (s *source) GetSearchFilters(_ context.Context, req *enginelibrary.GetSearc
 func distinctValues(tracks []sc.Track, value func(sc.Track) string) []*enginelibrary.SearchFilterValue {
 	seen := map[string]struct{}{}
 	for _, track := range tracks {
-		if v := strings.TrimSpace(value(track)); v != "" {
+		v := strings.ToValidUTF8(value(track), "\uFFFD")
+		if v = strings.TrimSpace(v); v != "" {
 			seen[v] = struct{}{}
 		}
 	}

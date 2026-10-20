@@ -57,7 +57,8 @@ Playlists
 ```
 
 `GetLibraries` exposes the source. `GetLibrary` exposes the tree. `GetTracks`
-returns one response with up to `--max-feed-items` chronological entries.
+returns one response with up to `--max-feed-items` chronological entries,
+capped at 200.
 `SearchTracks` uses the public SoundCloud search endpoint. `GetTrack` returns
 an Engine path such as:
 

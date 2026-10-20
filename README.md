@@ -12,6 +12,7 @@ Device and protocol research is documented separately in the
 
 ## Verified target
 
+- Source release `v0.2.6`
 - Denon DJ Prime 4+ (`JC11S`)
 - Engine OS 4.3.4
 - ARMv7 hard-float userland
@@ -39,7 +40,7 @@ loads the HTTP stream through its normal EaaS playback path.
 
 ```text
 SC_PROFILE=<public-profile-permalink>
-SC_EAAS_HOST_IP=<player-or-source-lan-ip>
+SC_EAAS_HOST_IP=<advertised-eaas-ip>
 SC_LOCAL_IP=<local-source-alias>
 SC_LOCAL_IF=wlan0
 SC_MAX_FEED_ITEMS=200
@@ -51,13 +52,10 @@ SC_CACHE_MIN_FREE_BYTES=1073741824
 
 `SC_PROFILE` is required. There is no default account.
 
-When running directly on the player, use the player's LAN address for
-`SC_EAAS_HOST_IP` so the EaaS discovery response advertises the correct gRPC
-endpoint.
-
-Use a dedicated source alias such as `192.168.4.90` for both
-`SC_EAAS_HOST_IP` and `SC_LOCAL_IP` so the beacon reply originates from a
-distinct EaaS address. `SC_LOCAL_IF` names the LAN interface that owns the alias.
+When running directly on the player, set both `SC_EAAS_HOST_IP` and
+`SC_LOCAL_IP` to a dedicated source alias such as `192.168.4.90`. This keeps
+the beacon reply on a distinct EaaS address while Engine retains its primary
+LAN address. `SC_LOCAL_IF` names the LAN interface that owns the alias.
 The systemd unit creates the address before startup. Engine already owns TCP
 `50010` on the primary LAN address and `127.0.0.1`; the source binds the same
 standard ports only on the alias. UDP `11224` is shared through `SO_REUSEPORT`.
@@ -157,7 +155,8 @@ delete `/data/prime4-app/cache`; the next play will recreate the needed file.
 
 The source enforces three independent limits:
 
-- It writes no more than the 512 MiB cache quota in total.
+- It writes no more than the configured quota in total: 512 MiB by default,
+  with a 2 GiB hard maximum.
 - It stops if writing would leave less than 1 GiB free on the filesystem.
 - It deletes the oldest completed track files first when either limit is
   reached.
@@ -184,8 +183,8 @@ instead of filling `/data`.
 Engine UI
   │
   ├─ UDP 11224 discovery
-  ├─ gRPC 50010 library and track metadata
-  └─ HTTP 50020 audio and artwork
+  ├─ gRPC 50010 library, track metadata, and embedded artwork
+  └─ HTTP 50020 cached audio
 ```
 
 The source resolves public profile data through Soundcloak's anonymous
@@ -209,13 +208,16 @@ docker compose up -d --build
 ```
 
 Set `SC_EAAS_HOST_IP` to the Docker host's LAN address, not the internal
-container address.
+container address. Leave `SC_LOCAL_IP` empty for Docker: the local-peer filter
+is intentionally on-player-only. Firewall TCP 50010/50020 and UDP 11224 to the
+intended DJ LAN.
 
 ## Project layout
 
 ```text
 deploy/                  systemd unit and environment template
 cmd/probe/               gRPC smoke tester
+cmd/discover/            UDP discovery smoke tester
 docs/                    architecture, API, and verification notes
 legacy/                  earlier standalone resolver/player client
 third_party/             pinned go-stagelinq and Soundcloak sources

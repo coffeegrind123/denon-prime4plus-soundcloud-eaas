@@ -8,12 +8,15 @@ The GRPC server listens on port 50010.
 
 #### Request parameters
 
-- `string` - UUID of the device requesting trust
-- `string` - Name of the device requesting trust
+- `string ed25519_pk` - Ed25519 public key of the device requesting trust
+- `uint32 wireguard_port` - Requested WireGuard port
+- `string device_name` - Name of the device requesting trust
 
 #### Response
 
-GRPC status is always 0. Status can be one of the values for Granted, Denied or Busy.
+After the client passes any local-peer gate, gRPC status is 0 and the response
+is Granted, Denied, or Busy. A local-only deployment may reject other peers
+with gRPC `PermissionDenied` before this handler runs.
 
 ### `enginelibrary.v1.EngineLibraryService/GetLibrary`
 ### `enginelibrary.v1.EngineLibraryService/EventStream`

@@ -18,12 +18,13 @@ Get details about instance's configuration. Some instances may hide this informa
     "DefaultAutoplayMode": "normal",
     "HLSAudio": "aac",
     "RestreamAudio": "mpeg",
+    "ProgressiveAudio": "mpeg",
     "DownloadAudio": "mpeg",
     "ShowAudio": false,
     "SearchSuggestions": false,
-    "DynamicLoadComments": false,
     "KeepPlayerFocus": false,
-    "Waveform": false
+    "Waveform": false,
+    "DRM": false
   },
   "Commit": "910261d",
   "Repo": "https://git.maid.zone/stuff/soundcloak",
@@ -138,7 +139,7 @@ Keep in mind that this is unofficial, using reversed not-public API, probably no
 
 ## Audio streaming
 
-Soundcloud offers [two audio presets](docs/AUDIO_PRESETS.md). There is multiple methods available for streaming audio, each with it's own behavior:
+Soundcloud offers [four audio presets](AUDIO_PRESETS.md). There are multiple methods available for streaming audio, each with its own behavior:
 
 - HLS (`/_/api/hls/:author/:track`)
 

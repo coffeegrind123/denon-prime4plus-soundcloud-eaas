@@ -45,7 +45,7 @@ Relevant protocols:
 
 | Protocol | Use |
 |---|---|
-| `progressive` | Proxy directly with Range support |
+| `progressive` | Materialize into the bounded local cache |
 | `hls` | Materialize init + segments into fMP4 |
 | `ctr-encrypted-hls` | Reject; protected content |
 | `cbc-encrypted-hls` | Reject; protected content |

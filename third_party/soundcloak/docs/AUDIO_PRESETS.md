@@ -4,3 +4,7 @@
 | `"aac"`    | mp4 (m4a)  | 160kbps          | Mostly available. Falls back to MPEG if unavailable                                |
 | `"mpeg"`   | mpeg (mp3) | 128kbps          | Always available for now. Will probably be removed and replaced by low quality AAC |
 | `"aac_lq"` | mp4 (m4a)  | 96kbps           | Most recently added. Good for low bandwidth users (?)                              |
+
+The `aac` selection order is `aac_160k`, `aac_256k`, MPEG 128k, then `aac_lq`.
+The 256k AAC preset normally requires a Go+ account, so public-only clients
+usually resolve to 160k AAC or MP3.

@@ -20,4 +20,4 @@ require (
 	golang.org/x/text v0.42.0 // indirect
 )
 
-replace git.maid.zone/stuff/soundcloak => ../soundcloak
+replace git.maid.zone/stuff/soundcloak => ../../third_party/soundcloak

@@ -23,7 +23,7 @@ import (
 
 const (
 	softwareName = "SoundCloud EaaS"
-	softwareVer  = "0.1.0"
+	softwareVer  = "0.2.6"
 )
 
 func main() {
@@ -77,15 +77,21 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer cancel()
 
-	localPeers, err := localPeerIPs()
-	if err != nil {
-		log.Fatalf("enumerate local addresses: %v", err)
+	grpcOptions := []grpc.ServerOption{grpc.MaxSendMsgSize(32 * 1024 * 1024)}
+	httpHandler := source.httpHandler()
+	if localIP != "" {
+		localPeers, err := localPeerIPs()
+		if err != nil {
+			log.Fatalf("enumerate local addresses: %v", err)
+		}
+		grpcOptions = append(
+			grpcOptions,
+			grpc.UnaryInterceptor(localOnlyUnary(localPeers)),
+			grpc.StreamInterceptor(localOnlyStream(localPeers)),
+		)
+		httpHandler = localOnlyHTTP(httpHandler, localPeers)
 	}
-	grpcServer := grpc.NewServer(
-		grpc.MaxSendMsgSize(32*1024*1024),
-		grpc.UnaryInterceptor(localOnlyUnary(localPeers)),
-		grpc.StreamInterceptor(localOnlyStream(localPeers)),
-	)
+	grpcServer := grpc.NewServer(grpcOptions...)
 	enginelibrary.RegisterEngineLibraryServiceServer(grpcServer, source)
 	networktrust.RegisterNetworkTrustServiceServer(grpcServer, &trustServer{})
 
@@ -102,7 +108,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:              net.JoinHostPort(localIP, fmt.Sprint(httpPort)),
-		Handler:           localOnlyHTTP(source.httpHandler(), localPeers),
+		Handler:           httpHandler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
