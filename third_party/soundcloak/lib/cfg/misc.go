@@ -1,0 +1,157 @@
+package cfg
+
+import (
+	"log"
+	"strings"
+	"time"
+	"unsafe"
+)
+
+// seems soundcloud has 4 of these (i1, i2, i3, i4)
+// they point to the same ip from my observations, and they all serve the same files
+const ImageCDN = "i1.sndcdn.com"
+const HLSCDN = "cf-hls-media.sndcdn.com"
+const HLSAACCDN = "playback.media-streaming.soundcloud.cloud"
+
+// Note: we don't need DialDualStack for clients, soundcloud has no ipv6 support and operates only over http1.1 :D
+const MaxIdleConnDuration = 4 * time.Hour
+
+var True = true
+var False = false
+
+// embedded at buildtime
+var Commit = "unknown"
+var Repo = "unknown"
+
+// generated at runtime
+var CommitURL = "unknown"
+
+const (
+	// choose best for the conditions =>
+	// if policy snip => restream/progressive only
+	// else if policy block => geoblocked
+	// else if drm {
+	// 		if prefs disable drm => tell user to enable,
+	// 	    else => hls.js only
+	// } else {
+	// 		restream/progressive audio element
+	//  	js replaces with hls.js if possible
+	// }
+	// also remmeber to show all player settings (?) or combine
+	AutoPlayer string = "auto"
+	// Downloads the HLS stream on the backend, and restreams it to frontend as a file.
+	// If requested MP3 preset, it uses Progressive protocol (so just proxying a file, maybe adding metadata if you need it)
+	// Requires no JS, but less stable client-side (browser likes to randomly unload the audio if you listen to shit on repeat xd)
+	RestreamPlayer string = "restream"
+	// Downloads the HLS stream on the frontend (proxying can be enabled). Requires JS, more stable client-side
+	HLSPlayer string = "hls"
+	// Just proxies the file given from Progressive stream, only available when restream is not, also just MP3 preset
+	ProgressivePlayer string = "progressive"
+	// Disables the song player
+	NonePlayer string = "none"
+)
+
+const (
+	// Just plays every song in order, one after another
+	AutoplayNormal string = "normal"
+	// Randomly selects a song to play from the playlist
+	AutoplayRandom string = "random"
+)
+
+const (
+	// DEPRECATED choose best for quality/size (AudioAAC over AudioOpus over AudioMP3)
+	AudioBest string = "best"
+
+	// 256kbps m4a AAC audio, you need account with subscription (fallback to AudioAAC, AudioMP3 or AudioAACLQ if unavailable)
+	AudioAACHQ string = "aac_hq"
+
+	// 160kbps m4a AAC audio, often available (fallback to AudioAACHQ, AudioMP3 or AudioAACLQ if unavailable)
+	AudioAAC string = "aac"
+
+	// DEPRECATED THEY REMOVED ALL OPUS ENCODING 72kbps ogg opus audio, usually available 0% of the time (fallback to AudioMP3 if unavailable)
+	AudioOpus string = "opus"
+
+	// 128kbps mp3 audio, probably getting dropped by sc soon (fallback to AudioAACHQ, AudioAAC or AudioAACLQ if unavailable)
+	AudioMP3 string = "mpeg"
+
+	// 96kbps m4a AAC audio, most recently added (fallback to AudioMP3, AudioAAC or AudioAACHQ if unavailable)
+	AudioAACLQ string = "aac_lq"
+)
+
+// for taking ptrs :)
+var MP3 = AudioMP3
+var AAC = AudioAAC
+var AACLQ = AudioAACLQ
+var Auto = AutoPlayer
+var Progressive = ProgressivePlayer
+
+type Preferences struct {
+	Player       *string
+	ProxyStreams *bool
+
+	// fully loads the track on page load
+	// this option is here since the stream expires after some time (5 minutes? correct me if im wrong)
+	// if the stream isn't fully loaded before it expires - you'll need to reload the page
+	FullyPreloadTrack *bool
+
+	ProxyImages *bool
+
+	// Highlight @username, https://example.com and email@example.com in text as clickable links
+	ParseDescriptions *bool
+
+	// Automatically play next track in playlists
+	AutoplayNextTrack *bool
+
+	// Automatically play next related track
+	AutoplayNextRelatedTrack *bool
+
+	DefaultAutoplayMode *string // "normal" or "random"
+
+	// Check above for more info
+	// Probably best to keep all at "mpeg" by default for compatibility
+	HLSAudio         *string //
+	RestreamAudio    *string // You can actually use anything here and above
+	ProgressiveAudio *string // "mpeg" for free, "aac_hq" for go+ accounts
+	DownloadAudio    *string // "aac" may not play well with some players due to it being in segmented format (maybe i will write something to remux it in the future)
+
+	ShowAudio *bool // display audio (aac/mpeg) under track player
+
+	SearchSuggestions *bool // load search suggestions on main page
+
+	KeepPlayerFocus *bool // keep player element in focus
+
+	Waveform *bool // show waveform
+
+	DRM *bool // allow playing DRM tracks with HLS player (widevine, decryption on your device)
+}
+
+func B2s(b []byte) string {
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+
+func S2b(s string) []byte {
+	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
+func init() {
+	defer func() {
+		rec := recover()
+		if rec != nil {
+			log.Printf("WARNING: failed to parse repo and commit, please report this as an issue!!! repo: %s commit: %s\n", Repo, Commit)
+		}
+	}()
+
+	if Repo != "unknown" {
+		if !strings.HasPrefix(Repo, "http") {
+			s := strings.Split(Repo, "@")
+			s = strings.Split(s[1], ":")
+			CommitURL = "https://" + strings.Join(s, "/")
+		} else {
+			CommitURL = strings.TrimSuffix(Repo, "/")
+		}
+
+		CommitURL = strings.TrimSuffix(CommitURL, ".git")
+
+		CommitURL += "/commit/" + Commit
+	}
+}

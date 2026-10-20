@@ -1,0 +1,122 @@
+package templates
+
+import (
+	"context"
+	"git.maid.zone/stuff/soundcloak/lib/cfg"
+	"git.maid.zone/stuff/soundcloak/lib/sc"
+	"git.maid.zone/stuff/soundcloak/lib/textparsing"
+	"github.com/valyala/fasthttp"
+	"io"
+	"net/url"
+	"strconv"
+)
+
+templ Description(prefs cfg.Preferences, text string, injected templ.Component) {
+	if text != "" || injected != nil {
+		<details>
+			<summary>Description</summary>
+			<div style="padding-block: 1rem;">
+				<p style="white-space: pre-wrap; margin: 0;">
+					if text != "" {
+						if *prefs.ParseDescriptions {
+							@templ.Raw(textparsing.Format(text))
+						} else {
+							{ text }
+						}
+					}
+					if injected != nil {
+						@injected
+					}
+				</p>
+			</div>
+		</details>
+	}
+}
+
+func Bytes(b []byte) templ.Component {
+	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
+		_, err := w.Write(fasthttp.AppendHTMLEscapeBytes(nil, b))
+		return err
+	})
+}
+
+type Variant string
+
+const (
+	Warning Variant = "warning"
+	Notice  Variant = "notice"
+	Error   Variant = "error"
+)
+
+templ Alert(variant Variant) {
+	<div class={ "alert", string(variant) }>
+		@InfoIcon()
+		<p>
+			{ children... }
+		</p>
+	</div>
+}
+
+templ UserPlaylistTrackItem(pl *sc.UserPlaylistTrack) {
+	<a class="listing" href={ templ.SafeURL(pl.Href()) }>
+		{{
+			img := pl.Artwork
+			if pl.Kind == "user" {
+				img = pl.Avatar
+			}
+			if img == "" {
+				img = "/_/static/placeholder.jpg"
+			}
+		}}
+		<img loading="lazy" fetchpriority="low" src={ img }/>
+		<div class="meta">
+			if pl.Kind == "user" {
+				<h3>{ pl.Username }</h3>
+				if pl.FullName != "" {
+					<p>{ pl.FullName }</p>
+				}
+			} else {
+				<h3>{ pl.Title }</h3>
+				if pl.Kind == "track" {
+					<span>{ pl.Author.Username }</span>
+				} else {
+					<p>{ strconv.FormatInt(pl.TracksCount(), 10) } tracks</p>
+				}
+			}
+		</div>
+	</a>
+}
+
+templ Search(p *sc.Paginated[*sc.UserPlaylistTrack], prefs cfg.Preferences, content string) {
+	<span>Found { strconv.FormatInt(p.Total, 10) } results</span>
+	<br/>
+	<br/>
+	if len(p.Collection) == 0 && p.Total != 0 {
+		<p>no more results</p>
+	} else {
+		for _, u := range p.Collection {
+			@UserPlaylistTrackItem(u)
+		}
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?type=any&pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/search?"):])) } rel="noreferrer">more results</a>
+		}
+	}
+}
+
+templ Modal(modalId string, content templ.Component) {
+	{{ id := "modal-" + modalId + "-open" }}
+	<div>
+		<input id={ id } name={ id } class="modal-cond" type="checkbox"/>
+		<div class="modal">
+			<label class="modal-backdrop" for={ id }></label>
+			<div class="modal-content-wrapper">
+				<label class="modal-close" for={ id }>
+					@CloseIcon()
+				</label>
+				<div class="modal-content">
+					@content
+				</div>
+			</div>
+		</div>
+	</div>
+}

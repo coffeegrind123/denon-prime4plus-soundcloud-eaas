@@ -1,0 +1,196 @@
+package templates
+
+import "git.maid.zone/stuff/soundcloak/lib/cfg"
+
+templ checkbox(name string, checked bool) {
+	<input name={ name } type="checkbox" autocomplete="off" checked?={ checked }/>
+}
+
+type option struct {
+	value    string
+	desc     string
+	disabled bool
+}
+
+// i hate this
+// ^ outdated, i no longer hate this
+templ sel(name string, options []option, selected string) {
+	<select name={ name } autocomplete="off">
+		for _, opt := range options {
+			<option
+				value={ opt.value }
+				selected?={ opt.value==selected }
+				disabled?={ opt.disabled }
+			>{ opt.desc }</option>
+		}
+	</select>
+}
+
+templ sel_audio(name string, selected string) {
+	@sel(name, []option{
+		{cfg.AudioAACHQ, "M4A AAC 256kb/s", len(cfg.AccountTokens) == 0},
+		{cfg.AudioAAC, "M4A AAC 160kb/s", false},
+		{cfg.AudioMP3, "MP3 128kb/s", false},
+		{cfg.AudioAACLQ, "M4A AAC 96kb/s", false},
+	}, selected)
+}
+
+templ sel_audio_prog(name string, selected string) {
+	@sel(name, []option{
+		{cfg.AudioAACHQ, "M4A AAC 256kb/s", len(cfg.AccountTokens) == 0},
+		{cfg.AudioMP3, "MP3 128kb/s", false},
+	}, selected)
+}
+
+templ js() {
+	<span class="js">(requires JS)</span>
+}
+
+templ Preferences(prefs cfg.Preferences) {
+	<h1>Preferences</h1>
+	<form method="post" autocomplete="off">
+		if cfg.Restream {
+			<label>
+				Download audio:
+				@sel_audio("DownloadAudio", *prefs.DownloadAudio)
+			</label>
+		}
+		<h1>Player preferences</h1>
+		<label>
+			Player:
+			@sel("Player", []option{
+				{cfg.AutoPlayer, "Auto", false},
+				{cfg.RestreamPlayer, "Restream Player", !cfg.Restream},
+				{cfg.HLSPlayer, "HLS Player", false},
+				{cfg.ProgressivePlayer, "Progressive Player", false},
+				{cfg.NonePlayer, "None", false},
+			}, *prefs.Player)
+		</label>
+		switch *prefs.Player {
+			case cfg.AutoPlayer:
+				if cfg.ProxyStreams {
+					<label>
+						Proxy song streams:
+						@checkbox("ProxyStreams", *prefs.ProxyStreams)
+					</label>
+				}
+				<label>
+					Fully preload track:
+					@checkbox("FullyPreloadTrack", *prefs.FullyPreloadTrack)
+				</label>
+				// this is a pseudo-config option, it will just set config for HLS, Restream and Progressive at once
+				<label>
+					Streaming audio:
+					@sel_audio("AutoAudio", *prefs.HLSAudio)
+				</label>
+				<label>
+					Widevine DRM:
+					@checkbox("DRM", *prefs.DRM)
+					@js()
+				</label>
+			case cfg.ProgressivePlayer:
+				if cfg.ProxyStreams {
+					<label>
+						Proxy song streams:
+						@checkbox("ProxyStreams", *prefs.ProxyStreams)
+					</label>
+				}
+				<label>
+					Streaming audio:
+					@sel_audio_prog("ProgressiveAudio", *prefs.ProgressiveAudio)
+				</label>
+			case cfg.HLSPlayer:
+				@js()
+				if cfg.ProxyStreams {
+					<label>
+						Proxy song streams:
+						@checkbox("ProxyStreams", *prefs.ProxyStreams)
+					</label>
+				}
+				<label>
+					Fully preload track:
+					@checkbox("FullyPreloadTrack", *prefs.FullyPreloadTrack)
+				</label>
+				<label>
+					Streaming audio:
+					@sel_audio("HLSAudio", *prefs.HLSAudio)
+				</label>
+				<label>
+					Widevine DRM:
+					@checkbox("DRM", *prefs.DRM)
+				</label>
+			case cfg.RestreamPlayer:
+				<label>
+					Streaming audio:
+					@sel_audio("RestreamAudio", *prefs.RestreamAudio)
+				</label>
+		}
+		<h1>Frontend enhancements</h1>
+		if cfg.ProxyImages {
+			<label>
+				Proxy images:
+				@checkbox("ProxyImages", *prefs.ProxyImages)
+			</label>
+		}
+		<label>
+			Parse descriptions:
+			@checkbox("ParseDescriptions", *prefs.ParseDescriptions)
+		</label>
+		<label>
+			Show current audio:
+			@checkbox("ShowAudio", *prefs.ShowAudio)
+		</label>
+		<label>
+			Fetch search suggestions:
+			@checkbox("SearchSuggestions", *prefs.SearchSuggestions)
+			@js()
+		</label>
+		<label>
+			Keep player focus:
+			@checkbox("KeepPlayerFocus", *prefs.KeepPlayerFocus)
+			@js()
+		</label>
+		<label>
+			Show audio waveform:
+			@checkbox("Waveform", *prefs.Waveform)
+			if *prefs.Player == cfg.RestreamPlayer {
+				<i>(works best with HLS player)</i>
+			}
+		</label>
+		<h2 style="margin-bottom: .35rem">Autoplay</h2>
+		<i><span class="js">Requires JS. </span>You also need to allow autoplay from this domain</i>
+		<label style="margin-top: 1rem">
+			Autoplay next track in playlists:
+			@checkbox("AutoplayNextTrack", *prefs.AutoplayNextTrack)
+		</label>
+		if *prefs.AutoplayNextTrack {
+			<label>
+				Default autoplay mode (in playlists):
+				@sel("DefaultAutoplayMode", []option{
+					{"normal", "Normal (play songs in order)", false},
+					{"random", "Random (play random song)", false},
+				}, *prefs.DefaultAutoplayMode)
+			</label>
+		}
+		<label>
+			Autoplay next related track:
+			@checkbox("AutoplayNextRelatedTrack", *prefs.AutoplayNextRelatedTrack)
+		</label>
+		<input type="submit" value="Update" class="btn" style="margin-top: 1rem;"/>
+		<p>These preferences get saved in a cookie.</p>
+	</form>
+	<h1>Management</h1>
+	<h2>Preferences</h2>
+	<div style="display: flex; gap: 1rem;">
+		<a class="btn" href="/_/preferences/export" download="soundcloak_preferences.json">Export</a>
+		<a class="btn" href="/_/preferences/reset">Reset</a>
+	</div>
+	<br/>
+	<form method="post" action="/_/preferences/import" autocomplete="off" style="display: grid; gap: 1rem;" enctype="multipart/form-data">
+		<input class="btn" type="file" autocomplete="off" name="prefs"/>
+		<input type="submit" value="Import" class="btn"/>
+	</form>
+	// oh mah gah
+	<style>label{display:flex;gap:.5rem;align-items:center;margin-bottom:.35rem}li>p{margin-top:0}</style>
+	<script>var y=document.getElementsByClassName('js');for(x=0;x<y.length;x++)y[x].style='display:none'</script>
+}

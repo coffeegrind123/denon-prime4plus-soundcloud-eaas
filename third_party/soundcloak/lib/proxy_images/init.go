@@ -1,0 +1,58 @@
+package proxyimages
+
+import (
+	"git.maid.zone/stuff/soundcloak/lib/cfg"
+	"git.maid.zone/stuff/soundcloak/lib/misc"
+	"git.maid.zone/stuff/soundcloak/lib/sc"
+	"github.com/gofiber/fiber/v3"
+	"github.com/valyala/fasthttp"
+)
+
+var al_httpc *fasthttp.HostClient
+
+func Load(r *fiber.App) {
+
+	al_httpc = &fasthttp.HostClient{
+		Addr:                "al.sndcdn.com:443",
+		IsTLS:               true,
+		MaxIdleConnDuration: cfg.MaxIdleConnDuration,
+		StreamResponseBody:  true,
+		MaxResponseBodySize: 1,
+	}
+
+	r.Get("/_/proxy/images", func(c fiber.Ctx) error {
+		url := c.RequestCtx().QueryArgs().Peek("url")
+		if len(url) == 0 {
+			return fiber.ErrBadRequest
+		}
+
+		parsed := fasthttp.AcquireURI()
+		defer fasthttp.ReleaseURI(parsed)
+
+		err := parsed.Parse(nil, url)
+		if err != nil {
+			return err
+		}
+
+		const x = ".sndcdn.com"
+		if h := parsed.Host(); len(h) > len(x) && string(h[len(h)-len(x):]) != x {
+			return fiber.ErrBadRequest
+		}
+
+		var cl *fasthttp.HostClient
+		if parsed.Host()[0] == 'i' {
+			parsed.SetHost(cfg.ImageCDN)
+			cl = misc.ImageStreamingOnlyClient
+		} else if string(parsed.Host()[:2]) == "al" {
+			cl = al_httpc
+		}
+
+		req := fasthttp.AcquireRequest()
+		defer fasthttp.ReleaseRequest(req)
+
+		req.SetURI(parsed)
+		req.Header.SetUserAgent(cfg.UserAgent)
+
+		return sc.DoWithRetry(cl, req, c.Response())
+	})
+}

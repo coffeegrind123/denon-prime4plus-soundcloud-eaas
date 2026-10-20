@@ -1,0 +1,519 @@
+package templates
+
+import (
+	"git.maid.zone/stuff/soundcloak/lib/cfg"
+	"git.maid.zone/stuff/soundcloak/lib/misc"
+	"git.maid.zone/stuff/soundcloak/lib/sc"
+	"git.maid.zone/stuff/soundcloak/lib/textparsing"
+	"net/url"
+	"strconv"
+	"strings"
+)
+
+templ TrackButtons(prefs cfg.Preferences, current string, track sc.Track) {
+	if cfg.Restream {
+		@Modal("download", DownloadModal(prefs, track))
+	}
+	<div class="btns">
+		{{
+			buttons := []btn{
+				{"related tracks", "/recommended", false, false},
+				{"in albums", "/albums", false, false},
+				{"in playlists", "/sets", false, false},
+				{"track station", "/discover/sets/" + track.Station, true, false},
+				{"view on soundcloud", "https://soundcloud.com" + track.Href(), true, true},
+			}
+		}}
+		for _, b := range buttons {
+			<a
+				if b.text == current {
+					class="btn active"
+				} else {
+					class="btn"
+					if b.override {
+						href={ templ.SafeURL(b.href) }
+					} else {
+						href={ templ.SafeURL(track.Href() + b.href) }
+					}
+					if b.external {
+						referrerpolicy="no-referrer"
+						rel="external nofollow noopener noreferrer"
+						target="_blank"
+					}
+				}
+			>{ b.text }</a>
+		}
+		if cfg.Restream {
+			<label class="btn" for="modal-download-open">download</label>
+		}
+	</div>
+}
+
+templ TrackHeader(prefs cfg.Preferences, t sc.Track, needPlayer bool) {
+	<meta name="og:site_name" content={ t.Author.Username + " ~ soundcloak" }/>
+	<meta name="og:title" content={ t.Title }/>
+	<meta name="og:description" content={ t.FormatDescription() }/>
+	<meta name="og:image" content={ t.Artwork }/>
+	<link rel="icon" type="image/x-icon" href={ t.Artwork }/>
+	if needPlayer && (*prefs.Player == cfg.HLSPlayer || *prefs.Player == cfg.AutoPlayer) {
+		<script src="/_/static/external/hls.min.js"></script>
+	}
+}
+
+func next(c *sc.Track, t *sc.Track, p *sc.Playlist, mode string, volume string) string {
+	r := strings.Builder{}
+	r.Grow(len(t.Href()) + len("autoplay=true") + 1)
+	r.WriteString(t.Href())
+
+	if p != nil {
+		r.WriteString("?playlist=")
+		r.WriteString(p.Href()[1:])
+		if mode != "" {
+			r.WriteString("&mode=")
+			r.WriteString(mode)
+		}
+		r.WriteByte('&')
+	} else {
+		r.WriteByte('?')
+
+		if c != nil {
+			r.WriteString("prev=")
+			r.WriteString(string(c.ID))
+			r.WriteByte('&')
+		}
+	}
+
+	r.WriteString("autoplay=true")
+
+	if volume != "" {
+		r.WriteString("&volume=")
+		r.WriteString(volume)
+	}
+
+	return r.String()
+}
+
+templ TrackPlayer(prefs cfg.Preferences, track sc.Track, transcoding *sc.Transcoding, stream sc.Stream, displayErr string, autoplay bool, nextTrack *sc.Track, playlist *sc.Playlist, volume string, mode string) {
+	if *prefs.Player == cfg.NonePlayer {
+		{{ return }}
+	}
+	if displayErr == "" {
+		if stream.URL != "" {
+			<div id="track-wrapper">
+				<audio
+					id="track"
+					src={ stream.URL }
+					controls
+					autoplay?={ autoplay }
+					if nextTrack != nil {
+						next={ next(&track, nextTrack, playlist, mode, "") }
+						volume={ volume }
+					}
+					if *prefs.FullyPreloadTrack {
+						preload="yes"
+					}
+					if stream.License != "" {
+						license={ stream.License }
+					}
+					player={ *prefs.Player }
+					keepfocus?={ *prefs.KeepPlayerFocus }
+					waveform?={ *prefs.Waveform }
+				></audio>
+				// TODO: remove keepfocus entirely, just add keyboard controls to the waveform player
+				if *prefs.Waveform {
+					<div class="waveform-wrapper jsOnly">
+						@track.RenderWaveform()
+						<div class="waveform-overlay">
+							<div class="waveform-time waveform-start" data-time="0"></div>
+							<div class="waveform-time waveform-end" data-time={ track.Duration / 1000 }></div>
+						</div>
+					</div>
+				}
+			</div>
+		}
+		<script async src="/_/static/player.js"></script>
+		if *prefs.Player == "hls" {
+			<noscript>
+				<br/>
+				JavaScript is disabled! Audio playback may not work without it enabled. 
+				<br/>
+				<a class="link" href="/_/preferences">
+					You can enable 
+					if cfg.Restream {
+						Restream or Progressive
+					} else {
+						Progressive
+					}
+					player in the preferences. It works without JavaScript.
+				</a>
+			</noscript>
+		}
+		if track.Policy == sc.PolicySnip {
+			@Alert(Warning) {
+				Only a 30-second snippet is available.
+			}
+		}
+		if track.Media.HasDRM() {
+			@Alert(Warning) {
+				Soundcloud is enforcing DRM on this track, so it may not be able to play.
+				switch *prefs.Player {
+					case cfg.HLSPlayer, cfg.AutoPlayer:
+						if !*prefs.DRM {
+							<a href="/_/preferences">You can enable DRM in preferences</a> and in your browser settings
+						}
+					case cfg.RestreamPlayer, cfg.ProgressivePlayer:
+						<a href="/_/preferences">You can enable Auto player and DRM in preferences</a>. You must also enable it in your browser settings
+				}
+			}
+		}
+		if *prefs.ShowAudio {
+			<div>
+				<p>Audio: { transcoding.SoundcloakPreset }</p>
+			</div>
+		}
+	} else {
+		// maybe error alert? but its not implemented
+		@Alert(Warning) {
+			{ displayErr }
+		}
+	}
+}
+
+templ TrackItem(track *sc.Track, showUsername bool, overrideHref string) {
+	if track.Title != "" {
+		{{
+			if overrideHref == "" {
+				overrideHref = track.Href()
+			}
+		}}
+		<a class="listing" href={ templ.SafeURL(overrideHref) }>
+			<img
+				loading="lazy"
+				fetchpriority="low"
+				if track.Artwork != "" {
+					src={ track.Artwork }
+				} else {
+					src="/_/static/placeholder.jpg"
+				}
+			/>
+			<div class="meta">
+				<h3>{ track.Title }</h3>
+				if showUsername {
+					<span>{ track.Author.Username }</span>
+				}
+			</div>
+		</a>
+	}
+}
+
+templ TrackMetaItem(icon templ.Component, alt string, number int64) {
+	<div class="track-meta-item tooltip">
+		<div class="tooltip-content-wrapper">
+			<div class="tooltip-content" style="white-space: nowrap;">
+				{ strconv.FormatInt(number, 10) + " " + alt }
+			</div>
+		</div>
+		<div class="track-meta-icon">
+			@icon
+		</div>
+		<div class="track-meta-number">
+			{ misc.HumanizeNumber(number) }
+		</div>
+	</div>
+}
+
+templ DownloadModal(prefs cfg.Preferences, t sc.Track) {
+	<h1>
+		<a href={ templ.SafeURL(t.Href()) } id="title">{ t.Title }</a>
+	</h1>
+	<form action={ "/_/download" + t.Href() } method="post" autocomplete="off">
+		@sel_audio2("audio", *prefs.RestreamAudio, t.GetDisabledFormats())
+		<details style="margin-top: 1rem; margin-bottom: 1rem">
+			<summary>File metadata</summary>
+			<label class="download-metadata">
+				Title:
+				@text("title", t.Title)
+			</label>
+			<label class="download-metadata">
+				Author:
+				@text("author", t.Author.Username)
+			</label>
+			<label class="download-metadata">
+				Genre:
+				@text("genre", t.Genre)
+			</label>
+		</details>
+		<input type="submit" value="Download" class="btn" style="margin-top: 1rem;"/>
+	</form>
+}
+
+templ Track(prefs cfg.Preferences, t sc.Track, tr *sc.Transcoding, stream sc.Stream, displayErr string, autoplay bool, playlist *sc.Playlist, nextTrack *sc.Track, volume string, mode string, comments *sc.Paginated[*sc.Comment], lastCommentTime int) {
+	<div class="track-block">
+		<div class="track-main">
+			<div class="track-title-block">
+				<div class="track-title-left">
+					if *prefs.Waveform && displayErr == "" {
+						<div class="play-button paused jsOnly">
+							<div class="icon-paused">
+								<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M20.346 11.58a.5.5 0 0 1 0 .84L7.77 20.506a.5.5 0 0 1-.77-.42V3.914a.5.5 0 0 1 .77-.42l12.576 8.084Z" fill="currentColor"></path></svg>
+							</div>
+							<div class="icon-playing jsOnly">
+								<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M10 4.5c0-.276-.252-.5-.563-.5H5.563C5.252 4 5 4.224 5 4.5v15c0 .276.252.5.563.5h3.875c.31 0 .562-.224.562-.5v-15ZM19 4.5c0-.276-.252-.5-.563-.5h-3.875c-.31 0-.562.224-.562.5v15c0 .276.252.5.563.5h3.874c.311 0 .563-.224.563-.5v-15Z" fill="currentColor"></path></svg>
+							</div>
+						</div>
+					}
+					<div class="track-title">{ t.Title }</div>
+				</div>
+				if t.Genre != "" {
+					<a href={ templ.SafeURL("/tags/" + t.Genre) }><p class="tag btn">{ t.Genre }</p></a>
+				}
+			</div>
+			@TrackPlayer(prefs, t, tr, stream, displayErr, autoplay, nextTrack, playlist, volume, mode)
+			<div class="track-bottom">
+				<div class="track-controls">
+					if *prefs.Waveform && displayErr == "" {
+						<div class="track-volume-tooltip tooltip jsOnly">
+							<div class="tooltip-content-wrapper">
+								<div class="tooltip-content">
+									<input type="range" class="track-volume" min="0" max="100"/>
+								</div>
+							</div>
+							@VolumeIcon()
+						</div>
+						<div class="track-repeat tooltip jsOnly">
+							<div class="tooltip-content-wrapper">
+								<div class="tooltip-content">
+									Repeat
+								</div>
+							</div>
+							@RepeatIcon()
+						</div>
+					}
+				</div>
+				<div class="track-meta">
+					@TrackMetaItem(PlayIcon(), "plays", t.Played)
+					@TrackMetaItem(LikeIcon(), "likes", t.Likes)
+					@TrackMetaItem(RepostIcon(), "reposts", t.Reposted)
+				</div>
+			</div>
+		</div>
+		if t.Artwork != "" {
+			<img loading="lazy" fetchpriority="low" src={ t.Artwork } width="300px" height="300px"/>
+		}
+	</div>
+	if nextTrack != nil {
+		<details open style="margin-bottom: 1rem;" id="pbinfo">
+			<summary>Playback info</summary>
+			if playlist != nil {
+				<h2>In playlist:</h2>
+				@PlaylistItem(playlist, true)
+			}
+			<h2>Next track:</h2>
+			@TrackItem(nextTrack, true, next(&t, nextTrack, playlist, mode, volume))
+			<div style="display: flex; gap: 1rem">
+				if playlist != nil {
+					<a href={ templ.SafeURL(t.Href()) } class="btn" onclick="event.preventDefault(); stoppb()">Stop playlist playback</a>
+					if mode != cfg.AutoplayRandom {
+						<a href={ templ.SafeURL(next(nil, &t, playlist, cfg.AutoplayRandom, volume)) } class="btn">Switch to random mode</a>
+					} else {
+						<a href={ templ.SafeURL(next(nil, &t, playlist, cfg.AutoplayNormal, volume)) } class="btn">Switch to normal mode</a>
+					}
+				} else {
+					<a href={ templ.SafeURL(t.Href() + "?playRelated=false") } class="btn" onclick="event.preventDefault(); stoppb()">Stop playback</a>
+				}
+			</div>
+		</details>
+	}
+	@UserItem(&t.Author)
+	@TrackButtons(prefs, "", t)
+	// <div style="display: flex; gap: 1rem">
+	// 	<a class="btn" href={ templ.SafeURL("https://soundcloud.com" + t.Href()) }>view on soundcloud</a>
+	// 	if cfg.Restream {
+	// 		<a class="btn" href={ templ.SafeURL("/_/restream" + t.Href() + "?metadata=true") } download={t.Permalink + "." + toExt(audio)}>download</a>
+	// 	}
+	// </div>
+	<br/>
+	@Description(prefs, t.Description, nil)
+	<dl style="margin-top: 3rem;">
+		if t.CreatedAt != "" {
+			<dt>Created</dt>
+			<dd>{ misc.TryFormatRfc3339(t.CreatedAt) }</dd>
+		}
+		<dt>Last modified</dt>
+		<dd>{ misc.TryFormatRfc3339(t.LastModified) }</dd>
+		if t.TagList != "" {
+			<dt>Tags</dt>
+			<dd>{ sc.TagListParser(t.TagList) }</dd>
+		}
+	</dl>
+	<details style="padding: 0; margin: 0; border: 0; margin-bottom: 3rem;">
+		<summary>Advanced info</summary>
+		<dl style="padding-top: 1rem; margin: 0">
+			if t.License != "" {
+				<dt>License</dt>
+				<dd>{ t.License }</dd>
+			}
+			if t.PublisherMetadata.ISRC != "" {
+				<dt>ISRC</dt>
+				<dd>{ t.PublisherMetadata.ISRC }</dd>
+			}
+			if t.PublisherMetadata.ISWC != "" {
+				<dt>ISWC</dt>
+				<dd>{ t.PublisherMetadata.ISWC }</dd>
+			}
+			if t.PublisherMetadata.UPCorEAN != "" {
+				<dt>UPC/EAN</dt>
+				<dd>{ t.PublisherMetadata.UPCorEAN }</dd>
+			}
+			<dt>Policy</dt>
+			<dd>{ t.Policy }</dd>
+		</dl>
+	</details>
+	<hr/>
+	<h1>Comments</h1>
+	if comments != nil {
+		<div id="comments">
+			@Comments(prefs, comments, lastCommentTime)
+		</div>
+		if comments.NextHref != "" {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(comments.NextHref[sc.H+len("/tracks/")+len(string(t.ID))+len("/comments?"):])) } rel="noreferrer" onclick="event.preventDefault(); comments(this)" data-id={ string(t.ID) }>more comments</a>
+		}
+	} else {
+		<div id="comments"></div>
+		<a class="btn" href="?pagination=%3Flimit%3D20%26threaded%3D1" data-id={ string(t.ID) } onclick="event.preventDefault(); comments(this)">load comments</a>
+	}
+	<script async src="/_/static/comments.js"></script>
+}
+
+templ Comments(prefs cfg.Preferences, comments *sc.Paginated[*sc.Comment], lastTime int) {
+	for _, c := range comments.Collection {
+		{{
+			isReply := lastTime == c.Timestamp
+			lastTime = c.Timestamp
+		}}
+		<div
+			if isReply {
+				class="listing listing-reply"
+			} else {
+				class="listing"
+			}
+		>
+			<img
+				if c.Author.Avatar != "" {
+					src={ c.Author.Avatar }
+				} else {
+					src="/_/static/placeholder.jpg"
+				}
+			/>
+			<div class="comment">
+				<h3>
+					<a class="link" href={ templ.SafeURL("/" + c.Author.Permalink) }>{ c.Author.Username }</a>
+					at
+					<a class="link" href="#" data-timestamp={ c.Timestamp }>
+						{ misc.FormatTimecode(c.Timestamp) }
+					</a>
+				</h3>
+				<p>
+					if *prefs.ParseDescriptions {
+						@templ.Raw(textparsing.Format(c.Body))
+					} else {
+						{ c.Body }
+					}
+				</p>
+			</div>
+		</div>
+	}
+}
+
+templ TrackEmbed(prefs cfg.Preferences, t sc.Track, tr *sc.Transcoding, stream sc.Stream, displayErr string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<link rel="stylesheet" href="/_/static/global.css"/>
+			<title>soundcloak</title>
+		</head>
+		<body>
+			if t.Artwork != "" {
+				<img src={ t.Artwork } width="300px"/>
+			}
+			<h1>{ t.Title }</h1>
+			@TrackPlayer(prefs, t, tr, stream, displayErr, false, nil, nil, "", "")
+			@UserItem(&t.Author)
+		</body>
+	</html>
+}
+
+templ SearchTracks(p *sc.Paginated[*sc.Track], prefs cfg.Preferences, content string) {
+	<span>Found { strconv.FormatInt(p.Total, 10) } tracks</span>
+	<br/>
+	<br/>
+	if len(p.Collection) == 0 && p.Total != 0 {
+		<p>no more results</p>
+	} else {
+		for _, track := range p.Collection {
+			@TrackItem(track, true, "")
+		}
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?type=tracks&pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/search/tracks?"):])) } rel="noreferrer">more tracks</a>
+		}
+	}
+}
+
+templ RelatedTracks(prefs cfg.Preferences, t sc.Track, p *sc.Paginated[*sc.Track]) {
+	if t.Artwork != "" {
+		<img src={ t.Artwork } width="300px"/>
+	}
+	<h1><a href={ templ.SafeURL(t.Href()) }>{ t.Title }</a></h1>
+	@TrackButtons(prefs, "related tracks", t)
+	<br/>
+	if len(p.Collection) == 0 {
+		<p>no more results</p>
+	} else {
+		for _, track := range p.Collection {
+			@TrackItem(track, true, "")
+		}
+		if p.NextHref != "" {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/tracks/")+len(string(t.ID))+len("/related?"):])) } rel="noreferrer">more tracks</a>
+		}
+	}
+}
+
+templ TrackInAlbums(prefs cfg.Preferences, t sc.Track, p *sc.Paginated[*sc.Playlist]) {
+	if t.Artwork != "" {
+		<img src={ t.Artwork } width="300px"/>
+	}
+	<h1><a href={ templ.SafeURL(t.Href()) }>{ t.Title }</a></h1>
+	@TrackButtons(prefs, "in albums", t)
+	<br/>
+	if len(p.Collection) == 0 {
+		<p>no more albums</p>
+	} else {
+		for _, playlist := range p.Collection {
+			@PlaylistItem(playlist, true)
+		}
+		if p.NextHref != "" {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/tracks/")+len(string(t.ID))+len("/albums?"):])) } rel="noreferrer">more albums</a>
+		}
+	}
+}
+
+templ TrackInPlaylists(prefs cfg.Preferences, t sc.Track, p *sc.Paginated[*sc.Playlist]) {
+	if t.Artwork != "" {
+		<img src={ t.Artwork } width="300px"/>
+	}
+	<h1><a href={ templ.SafeURL(t.Href()) }>{ t.Title }</a></h1>
+	@TrackButtons(prefs, "in playlists", t)
+	<br/>
+	if len(p.Collection) == 0 {
+		<p>no more playlists</p>
+	} else {
+		for _, playlist := range p.Collection {
+			@PlaylistItem(playlist, true)
+		}
+		if p.NextHref != "" {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/tracks/")+len(string(t.ID))+len("/playlists_without_albums?"):])) } rel="noreferrer">more playlists</a>
+		}
+	}
+}

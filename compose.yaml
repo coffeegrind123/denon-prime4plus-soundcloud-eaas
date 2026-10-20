@@ -1,0 +1,27 @@
+services:
+  soundcloud-eaas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "11224:11224/udp"
+      - "50010:50010/tcp"
+      - "50020:50020/tcp"
+    environment:
+      CLIENT_ID: ${SC_CLIENT_ID:-}
+      USER_AGENT: ${SC_USER_AGENT:-Mozilla/5.0}
+    command:
+      - --user
+      - ${SC_PROFILE:?set SC_PROFILE}
+      - --host-ip
+      - ${SC_EAAS_HOST_IP:-}
+      - --cache
+      - /var/cache/soundcloud-eaas
+      - --max-feed-items
+      - ${SC_MAX_FEED_ITEMS:-200}
+    volumes:
+      - soundcloud-eaas-cache:/var/cache/soundcloud-eaas
+
+volumes:
+  soundcloud-eaas-cache:

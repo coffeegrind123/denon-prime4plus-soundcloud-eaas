@@ -1,0 +1,38 @@
+# [Instances List](https://maid.zone/soundcloak/instances.html)
+
+# Viewing instance settings
+
+If the instance is in the [instances list](https://maid.zone/soundcloak/instances.html), then you can view a few of the settings there (ProxyStreams, ProxyImages, Restream)
+
+You can also visit `<instance>/_/info` to view some of the settings. This endpoint is only available if `InstanceInfo` is enabled by the maintainer.
+
+# Preferences
+
+Click the "Preferences" button on the main page, or navigate to `<instance>/_/preferences` to get started.
+
+Instance maintainers can set their own default preferences.
+
+[Refer to here](PREFERENCES.md) for a full list of preferences. If you don't see certain preferences on the page, it means that you have to enable a different preference to configure this one, or this feature has been disabled on the backend.
+
+Those preferences are saved in a cookie.
+
+## Management
+
+Scroll down to the end of the preferences page. There you can see a management tab for preferences. You can export your preferences as a JSON file, import the preferences, or reset them.
+
+# Redirecting from SoundCloud to soundcloak
+
+soundcloak tries to keep the URL schemes same to SoundCloud's, so you can just replace `soundcloud.com` with your instance URL. For short links: `https://on.soundcloud.com/boiKDP46fayYDoVK9` -> `<instance>/on/boiKDP46fayYDoVK9`
+
+To automatically redirect, you can use [LibRedirect](https://libredirect.github.io/) extension. Soundcloak is supported
+
+# Following artists
+
+There is no accounts system yet (maybe in the future?), but you can use [RSS](https://en.wikipedia.org/wiki/RSS) feeds to keep up with new tracks.
+
+You can subscribe to `<instance>/_/rss/<username>` in your feed reader program. Thunderbird works well for this
+
+# Extra notes
+
+If you find music that you like, make sure to download it! Stuff that's on there may be deleted or changed at any moment, without any warning or ability to experience it again, unless you download it for yourself. Download button is available if `Restream` is enabled in backend config. You can configure audio preset for downloading in preferences page.
+<!-- For easily and quickly downloading entire users or playlists, you can use my tool [scrip](https://git.maid.zone/laptop/scrip) (its not really maintained, maybe in the future?) -->

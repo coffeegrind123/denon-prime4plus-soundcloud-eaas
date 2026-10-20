@@ -1,0 +1,78 @@
+package templates
+
+import (
+	"git.maid.zone/stuff/soundcloak/lib/sc"
+	"net/url"
+	"strconv"
+)
+
+templ TagsButtons(current string, tag string) {
+	<div class="btns">
+		for _, b := range [...]btn{{"recent tracks", "", false, false},{"popular tracks", "/popular-tracks", false, false},{"playlists", "/playlists", false, false}} {
+			<a
+				if b.text == current {
+					class="btn active"
+				} else {
+					class="btn"
+					href={ templ.SafeURL("/tags/" + tag + b.href) }
+				}
+			>
+				{ b.text }
+			</a>
+		}
+	</div>
+	<br/>
+}
+
+templ RecentTracks(tag string, p *sc.Paginated[*sc.Track]) {
+	<h1>Recent tracks tagged { url.PathUnescape(tag) }</h1>
+	@TagsButtons("recent tracks", tag)
+	if len(p.Collection) == 0 {
+		<p>no more tracks</p>
+	} else {
+		for _, track := range p.Collection {
+			@TrackItem(track, true, "")
+		}
+		if p.NextHref != "" {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/recent-tracks/")+len(tag)+1:])) } rel="noreferrer">more tracks</a>
+		}
+	}
+}
+
+templ PopularTracks(tag string, p *sc.Paginated[*sc.Track]) {
+	<h1>Popular tracks tagged { url.PathUnescape(tag) }</h1>
+	@TagsButtons("popular tracks", tag)
+	<span>Found { strconv.FormatInt(p.Total, 10) } tracks</span>
+	<br/>
+	<br/>
+	if len(p.Collection) == 0 {
+		<p>no more tracks</p>
+	} else {
+		for _, track := range p.Collection {
+			@TrackItem(track, true, "")
+		}
+		if p.NextHref != "" {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/search/tracks?"):])) } rel="noreferrer">more tracks</a>
+		}
+	}
+}
+
+templ TaggedPlaylists(tag string, p *sc.Paginated[*sc.Playlist]) {
+	<h1>Playlists tagged { url.PathUnescape(tag) }</h1>
+	@TagsButtons("playlists", tag)
+	<span>Found { strconv.FormatInt(p.Total, 10) } playlists</span>
+	<br/>
+	<br/>
+	if len(p.Collection) == 0 {
+		if p.Total != 0 {
+			<p>no more results</p>
+		}
+	} else {
+		for _, playlist := range p.Collection {
+			@PlaylistItem(playlist, true)
+		}
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/search/playlists?"):])) } rel="noreferrer">more playlists</a>
+		}
+	}
+}

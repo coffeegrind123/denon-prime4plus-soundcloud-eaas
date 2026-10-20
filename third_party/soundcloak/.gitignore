@@ -1,0 +1,30 @@
+# soundcloak config (and instance-specific files)
+soundcloak.json
+static/instance/*
+
+# external js modules
+static/external/*
+
+# other configs
+compose.yaml
+fly.toml
+
+# created by soundcloak/dependencies
+.compression
+*.br
+*.gzip
+*.zstd
+
+# codegen
+*_templ.go
+!rss_templ.go
+regexp2_codegen.go
+
+# built binary
+main
+
+!.gitkeep
+
+# for development/testing
+Caddyfile
+misc/

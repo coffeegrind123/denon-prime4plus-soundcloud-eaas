@@ -1,0 +1,204 @@
+# Setup
+
+## Docker
+
+You need to have [Docker](https://docker.com) and [Git](https://git-scm.com) installed.
+
+1. Clone this repository:
+
+```sh
+git clone https://git.maid.zone/stuff/soundcloak
+```
+
+2. Go into the cloned repository:
+
+```sh
+cd soundcloak
+```
+
+3. Make a copy of the example compose.yaml file:
+
+```sh
+cp compose.example.yaml compose.yaml
+```
+
+Make adjustments as needed.
+
+4. _Optional._ Edit config:
+
+Refer to [Configuration guide](#configuration-guide) for configuration information. Can be configured from environment variables or JSON file.
+
+5. Run the container:
+
+```sh
+docker compose up -d
+```
+
+You might need to use `sudo` if you aren't running as root.
+
+Use `docker-compose` instead of `docker compose` if that fails.
+
+Soundcloak will now be up at `127.0.0.1:4664` (or the address you specified in your config). I recommend you run it through a reverse proxy (caddy, nginx, etc.)
+
+## Regular method
+
+Refer to the [developer guide](DEV_GUIDE.md#setup)
+
+### Extras
+
+Not required but can help. If using docker, it already does this stuff for you.
+
+- Precompressing static files
+
+For more effective file serving: `go tool soundcloakctl -nozstd precompress`
+
+You will have to run `go tool soundcloakctl clean` and re-run the above command each time static files change.
+
+- Config codegen
+
+Can help reduce binary size (if you don't use certain features) and performance (not by much): `go tool soundcloakctl config codegen`
+
+You will have to re-run this each time you change config or config structure changes
+
+# Updating your instance
+
+## Docker
+
+1. Retrieve the latest code:
+
+```sh
+git fetch origin
+git pull
+```
+
+2. Rebuild and restart the container:
+
+```sh
+docker compose up --build -d
+```
+
+Use `docker-compose` instead of `docker compose` if that fails.
+
+## Regular method
+
+Refer to the [developer guide](DEV_GUIDE.md#updating-your-local-setup)
+
+# Configuration/customization
+
+## Configuration guide
+
+<details>
+<summary>Click to view</summary>
+
+You can only configure in one of the two ways:
+
+- Using config file (`soundcloak.json` in current directory // your own path and filename)
+- Using environment variables (`SOUNDCLOAK_CONFIG` must be set to `FROM_ENV`!)
+
+Some notes:
+
+- When specifying time, specify it in seconds.
+
+| JSON key                | Environment variable       | Default value                                                                                                                                                                                                                                                                                                                          | Description                                                                                                                                                                                                                                                                                                                            |
+| ----------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| None                    | SOUNDCLOAK_CONFIG          | soundcloak.json                                                                                                                                                                                                                                                                                                                        | File to load soundcloak config from. If set to `FROM_ENV`, soundcloak loads the config from environment variables.                                                                                                                                                                                                                     |
+| GetWebProfiles          | GET_WEB_PROFILES           | true                                                                                                                                                                                                                                                                                                                                   | Retrieve links users set in their profile (social media, website, etc)                                                                                                                                                                                                                                                                 |
+| DefaultPreferences      | DEFAULT_PREFERENCES        | {"Player": "hls", "ProxyStreams": false, "FullyPreloadTrack": false, "ProxyImages": false, "ParseDescriptions": true, "AutoplayNextTrack": false, "DefaultAutoplayMode": "normal", "HLSAudio": "mpeg", "RestreamAudio": "mpeg", "DownloadAudio": "mpeg", "ShowAudio": false, "SearchSuggestions": false, "DynamicLoadComments": false} | see /_/preferences page. [Read more](PREFERENCES.md)                                                                                                                                                                                                                                                                                   |
+| ProxyImages             | PROXY_IMAGES               | false                                                                                                                                                                                                                                                                                                                                  | Enables proxying of images (user avatars, track covers etc)                                                                                                                                                                                                                                                                            |
+| ProxyStreams            | PROXY_STREAMS              | false                                                                                                                                                                                                                                                                                                                                  | Enables proxying of song parts and hls playlist files                                                                                                                                                                                                                                                                                  |
+| Restream                | RESTREAM                   | false                                                                                                                                                                                                                                                                                                                                  | Enables Restream Player in settings and the /_/restream/:author/:track endpoint. This player can be used without JavaScript. Restream also enables the button for downloading songs.                                                                                                                                                   |
+| RestreamCacheControl    | RESTREAM_CACHE_CONTROL     | max-age=252460800                                                                                                                                                                                                                                                                                                                      | [Cache-Control](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control) header value for restreamed songs                                                                                                                                                                                                             |
+| ClientIDTTL             | CLIENT_ID_TTL              | 14400 (4 hours)                                                                                                                                                                                                                                                                                                                        | Time until ClientID cache expires. ClientID is used for authenticating with SoundCloud API (specify in seconds)                                                                                                                                                                                                                        |
+| UserTTL                 | USER_TTL                   | 1200 (20 minutes)                                                                                                                                                                                                                                                                                                                      | Time until User profile cache expires (specify in seconds)                                                                                                                                                                                                                                                                             |
+| UserCacheCleanDelay     | USER_CACHE_CLEAN_DELAY     | 300 (5 minutes)                                                                                                                                                                                                                                                                                                                        | Time between each cleanup of the users cache (specify in seconds)                                                                                                                                                                                                                                                                      |
+| TrackTTL                | TRACK_TTL                  | 1200 (20 minutes)                                                                                                                                                                                                                                                                                                                      | Time until Track data cache expires (specify in seconds)                                                                                                                                                                                                                                                                               |
+| TrackCacheCleanDelay    | TRACK_CACHE_CLEAN_DELAY    | 300 (5 minutes)                                                                                                                                                                                                                                                                                                                        | Time between each cleanup of the track cache (specify in seconds)                                                                                                                                                                                                                                                                      |
+| PlaylistTTL             | PLAYLIST_TTL               | 1200 (20 minutes)                                                                                                                                                                                                                                                                                                                      | Time until Playlist data cache expires (specify in seconds)                                                                                                                                                                                                                                                                            |
+| PlaylistCacheCleanDelay | PLAYLIST_CACHE_CLEAN_DELAY | 300 (5 minutes)                                                                                                                                                                                                                                                                                                                        | Time between each cleanup of the users cache (specify in seconds)                                                                                                                                                                                                                                                                      |
+| UserAgent               | USER_AGENT                 | Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0                                                                                                                                                                                                                                                                 | User-Agent header used for requests to SoundCloud                                                                                                                                                                                                                                                                                      |
+| ClientID                | CLIENT_ID                  | (empty)                                                                                                                                                                                                                                                                                                                                | Authorization token for requests to SoundCloud. It's automatically extracted from the current version of the website, but you can override it if there are issues                                                                                                                                                                      |
+| EnableAPI               | ENABLE_API                 | false                                                                                                                                                                                                                                                                                                                                  | Should [API](API.md) be enabled?                                                                                                                                                                                                                                                                                                       |
+| SoundcloudApiProxy      | SOUNDCLOUD_API_PROXY       | ""                                                                                                                                                                                                                                                                                                                                     | SOCKS5 or HTTP proxy to use when dialing soundcloud api's                                                                                                                                                                                                                                                                              |
+| DialDualStack           | DIAL_DUAL_STACK            | false                                                                                                                                                                                                                                                                                                                                  | Should try to also dial on ipv6?                                                                                                                                                                                                                                                                                                       |
+| SpoofTLS                | SPOOF_TLS                  | false                                                                                                                                                                                                                                                                                                                                  | Spoof TLS fingerprint                                                                                                                                                                                                                                                                                                                  |
+| AccountTokens           | ACCOUNT_TOKENS             | []                                                                                                                                                                                                                                                                                                                                     | You can add account(s) tokens for use here. If multiple - it will switch between them for each request using round-robin. Main use is getting 256kbps aac using accounts with go+ subscription (please keep in mind this is not an official app and soundcloud may not like you using your account in this way)                        |
+| UseTokensInAPI          | USE_TOKENS_IN_API          | false                                                                                                                                                                                                                                                                                                                                  | Use account tokens provided above in the API proxy                                                                                                                                                                                                                                                                                     |
+| Network                 | NETWORK                    | tcp4                                                                                                                                                                                                                                                                                                                                   | Network to listen on. Can be tcp4, tcp6 or unix                                                                                                                                                                                                                                                                                        |
+| Addr                    | ADDR                       | :4664                                                                                                                                                                                                                                                                                                                                  | Address and port (or socket path) for soundcloak to listen on                                                                                                                                                                                                                                                                          |
+| UnixSocketPerms         | UNIX_SOCKET_PERMS          | 0775                                                                                                                                                                                                                                                                                                                                   | Permissions for unix socket (Network must be set to unix)                                                                                                                                                                                                                                                                              |
+| Prefork                 | PREFORK                    | false                                                                                                                                                                                                                                                                                                                                  | Run multiple instances of soundcloak locally to be able to handle more requests. Each one will be a separate process, so they will have separate cache.                                                                                                                                                                                |
+| TrustedProxyCheck       | TRUSTED_PROXY_CHECK        | true                                                                                                                                                                                                                                                                                                                                   | Use X-Forwarded-* headers if IP is in TrustedProxies list. When disabled, those headers will blindly be used.                                                                                                                                                                                                                          |
+| TrustedProxies          | TRUSTED_PROXIES            | []                                                                                                                                                                                                                                                                                                                                     | List of IPs or IP ranges of trusted proxies                                                                                                                                                                                                                                                                                            |
+| CodegenConfig           | CODEGEN_CONFIG             | false                                                                                                                                                                                                                                                                                                                                  | Embeds the config into the binary, which helps reduce size if you aren't using certain features and generally optimize the binary better. Keep in mind that you will have to rebuild the image/binary each time you want to change config. (Note: you need to run `soundcloakctl config codegen` or use docker, as it runs it for you) |
+| EmbedFiles              | EMBED_FILES                | true                                                                                                                                                                                                                                                                                                                                   | Embed files into the binary. Keep in mind that you will have to rebuild the image/binary each time static files are changed (e.g. custom instance files)                                                                                                                                                                               |
+
+</details>
+
+## Potential issues
+
+### Status code 403/429
+
+Your IP address did too many requests to SoundCloud and got blocked for a bit of time.
+
+_I'm not sure, but it seems like soundcloud banned ips of some public instances :P, you can now set a proxy to try and bypass it_
+
+### script/version/clientid not found
+
+soundcloak failed to extract the ClientID token from SoundCloud.
+This may happen due to your due to changes made by SoundCloud, or IP getting blocked.
+
+In case your IP is not blocked, please report this issue to me on [Codeberg](https://codeberg.org/maid-zone/soundcloak/issues/new) or [GitHub](https://github.com/maid-zone/soundcloak/issues/new) or elsewhere
+
+As a temporary fix, you can go to SoundCloud website in your browser, open the Developer Tools, perform some actions (like loading a profile or searching) and check the Network tab.
+There you will see requests to `api-v2.soundcloud.com` with `client_id` parameter. You can use this token with the `ClientID` setting in soundcloak
+
+## Tinkering with the frontend
+
+<details>
+<summary>Click to view</summary>
+
+I will mainly talk about the static files here. Maybe about the templates too in the future
+
+Keep in mind that by default soundcloak will embed all static files into the built binary. You will need to rebuild each time you want to change something.
+Or you can also set `EmbedFiles` to `false`
+
+The static files are stored in `static/assets` folder
+
+### Overriding files
+
+1. Create a folder named `instance` in `static` folder
+2. Create a file with the same name as the one you want to override
+3. Put whatever you want there
+
+### Basic theming
+
+1. Create `instance.css` file in the `static/instance` folder
+2. Put your CSS rules there:
+
+```css
+/* Some basic CSS to change colors of the frontend. Put your own colors here as this one probably looks horrible (I did not test it) */
+:root {
+  --accent: #ffffff;
+  --primary: #000000;
+  --secondary: #00010a;
+  --0: #fafafa; /* Used for things, such as border color for buttons, etc */
+  --text: green;
+}
+```
+
+Refer to `static/assets/global.css` file for existing rules.
+
+</details>
+
+# Instance list
+
+To get listed on [the instance list](https://maid.zone/soundcloak/instances.html), create a discussion with some information about your instance, or [reach out privately](https://laptopc.at)
+
+Basic rules:
+
+1. Do not collect user information (either yourself, or by including 3rd party tooling which does that)
+2. If you are modifying the source code, publish those changes somewhere.
+
+Also, keep in mind that the instance list will periodically hit the `/_/info` endpoint on your instance (usually each 10 minutes) in order to display the instance settings. If you do not want this to happen, state it in your discussion/message, and I will exclude your instance from this checking.
+
+The source code powering the instance list can be found [here](https://git.maid.zone/stuff/soundcloak-instances)

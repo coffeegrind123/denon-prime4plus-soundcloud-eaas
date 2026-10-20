@@ -1,0 +1,663 @@
+package cfg
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/goccy/go-json"
+)
+
+// You can now use a soundcloak.json file to configure!
+// or you can specify a different path with environment variable SOUNDCLOAK_CONFIG
+// it's not needed to specify every key in your config, it will use the default values for keys you haven't specified
+// also, when specifying time, specify it in seconds (instead of nanoseconds as time.Duration)
+
+// // config // //
+
+// Retrieve links users set in their profile (social media, website, etc)
+var GetWebProfiles = true
+
+// Default preferences. You can override those preferences in the config file, otherwise they default to values depending on your config
+// (so, if you have ProxyStreams enabled - it will be enabled for the user by default and etc, or if you enabled Restream, the default player will be RestreamPlayer instead of HLSPlayer)
+var DefaultPreferences Preferences
+
+// proxy images (user avatars, track/playlist covers)
+var ProxyImages = false
+
+// proxy streams (hls playlist files and track parts)
+var ProxyStreams = false
+
+// restream the HLS playlist as just a file, makes soundcloak usable with zero JS
+// If this setting is set to true, ProxyStreams and FullyPreloadTrack will be ignored (you could count this as a replacement for having both as true, also should be a bit more effective)
+// You can also easily download the songs this way (right click => save audio as..., the only downside is that there is no metadata)
+var Restream = false
+var RestreamCacheControl = "max-age=252460800"
+
+// enable /_/info endpoint (shows if some settings are enabled/disabled)
+var InstanceInfo = true
+
+// time-to-live for clientid cache
+// larger number will improve performance (no need to recheck everytime) but might make soundcloak briefly unusable for a larger amount of time if the client id is invalidated
+// I went with 4 hours, since those clientids still remain active for quite some time, even after soundcloud updates it
+var ClientIDTTL = 4 * time.Hour
+
+// time-to-live for user profile cache
+var UserTTL = 20 * time.Minute
+
+// delay between cleanup of user cache
+var UserCacheCleanDelay = UserTTL / 4
+
+// time-to-live for track cache
+var TrackTTL = 20 * time.Minute
+
+// delay between cleanup of track cache
+var TrackCacheCleanDelay = TrackTTL / 4
+
+// time-to-live for playlist cache
+var PlaylistTTL = 20 * time.Minute
+
+// delay between cleanup of playlist cache
+var PlaylistCacheCleanDelay = PlaylistTTL / 4
+
+// best keep it same as tls fingerprint
+var UserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"
+
+// override the extractor
+var ClientID = ""
+
+// enab;e api
+var EnableAPI = false
+
+// yeah i doubt they will be reading this lolol
+var SoundcloudApiProxy = ""
+
+var DialDualStack = false
+
+// Spoof TLS fingerprint
+var SpoofTLS = true
+
+// you can use accounts with go+ to get 256k aac quality
+// keep in mind that soundcloak is not an official app, and soundcloud could possibly detect it and ban/restrict your accounts
+// if multiple tokens are provided == they are balanced between using round-robin
+var AccountTokens = []string{}
+
+// use above tokens for the /_/api/v2 as well (if enabled)
+var UseTokensInAPI = false
+
+// // // some webserver configuration, put here to make it easier to configure what you need // // //
+// more info can be found here: https://docs.gofiber.io/api/fiber#config
+
+// where to listen
+// can be tcp4 (bind to ipv4 address), tcp6 (bind to ipv6 address) or unix (bind to unix socket)
+var Network = "tcp4"
+
+// run soundcloak on this address (localhost:4664 by default)
+var Addr = ":4664"
+
+// unix socket perms wow
+var UnixSocketPerms os.FileMode = 0775
+
+// run multiple instances of soundcloak locally to be able to handle more requests
+// each one will be a separate process, so they will have separate cache
+var Prefork = false
+
+// use X-Forwarded-* headers ONLY when ip is in TrustedProxies list
+// when disabled, the X-Forwarded-* headers will be blindly used
+var TrustedProxyCheck = true
+
+// list of ips or ip ranges of trusted proxies (check above)
+var TrustedProxies = []string{}
+
+// generate code for config (run soundcloakctl config codegen or use docker image - it runs it for you)
+var CodegenConfig = false
+
+// use static files embedded in binary
+var EmbedFiles = true
+
+// // end of config // //
+
+func defaultPreferences() {
+	DefaultPreferences.Player = &Auto
+
+	DefaultPreferences.ProxyStreams = &ProxyStreams
+
+	DefaultPreferences.FullyPreloadTrack = &False
+
+	DefaultPreferences.ProxyImages = &ProxyImages
+
+	DefaultPreferences.ParseDescriptions = &True
+	DefaultPreferences.AutoplayNextTrack = &False
+	DefaultPreferences.AutoplayNextRelatedTrack = &False
+
+	p2 := AutoplayNormal
+	DefaultPreferences.DefaultAutoplayMode = &p2
+
+	DefaultPreferences.HLSAudio = &MP3
+	DefaultPreferences.RestreamAudio = &MP3
+	DefaultPreferences.ProgressiveAudio = &MP3
+	DefaultPreferences.DownloadAudio = &MP3
+
+	DefaultPreferences.ShowAudio = &False
+
+	DefaultPreferences.SearchSuggestions = &False
+	DefaultPreferences.KeepPlayerFocus = &False
+	DefaultPreferences.Waveform = &True
+	DefaultPreferences.DRM = &False
+}
+
+func loadDefaultPreferences(loaded Preferences) {
+	if loaded.Player != nil {
+		DefaultPreferences.Player = loaded.Player
+	} else {
+		DefaultPreferences.Player = &Auto
+	}
+
+	if loaded.ProxyStreams != nil {
+		DefaultPreferences.ProxyStreams = loaded.ProxyStreams
+	} else {
+		DefaultPreferences.ProxyStreams = &ProxyStreams
+	}
+
+	if loaded.FullyPreloadTrack != nil {
+		DefaultPreferences.FullyPreloadTrack = loaded.FullyPreloadTrack
+	} else {
+		DefaultPreferences.FullyPreloadTrack = &False
+	}
+
+	if loaded.ProxyImages != nil {
+		DefaultPreferences.ProxyImages = loaded.ProxyImages
+	} else {
+		DefaultPreferences.ProxyImages = &ProxyImages
+	}
+
+	if loaded.ParseDescriptions != nil {
+		DefaultPreferences.ParseDescriptions = loaded.ParseDescriptions
+	} else {
+		DefaultPreferences.ParseDescriptions = &True
+	}
+
+	if loaded.AutoplayNextTrack != nil {
+		DefaultPreferences.AutoplayNextTrack = loaded.AutoplayNextTrack
+	} else {
+		DefaultPreferences.AutoplayNextTrack = &False
+	}
+
+	if loaded.AutoplayNextRelatedTrack != nil {
+		DefaultPreferences.AutoplayNextRelatedTrack = loaded.AutoplayNextRelatedTrack
+	} else {
+		DefaultPreferences.AutoplayNextRelatedTrack = &False
+	}
+
+	if loaded.DefaultAutoplayMode != nil {
+		DefaultPreferences.DefaultAutoplayMode = loaded.DefaultAutoplayMode
+	} else {
+		p := AutoplayNormal
+		DefaultPreferences.DefaultAutoplayMode = &p
+	}
+
+	if loaded.HLSAudio != nil {
+		switch *loaded.HLSAudio {
+		case AudioBest:
+			fmt.Println(`"best" audio preset has been deprecated, please change it in your config. Interpreting it as "aac"`)
+			DefaultPreferences.HLSAudio = &AAC
+		default:
+			DefaultPreferences.HLSAudio = loaded.HLSAudio
+		}
+	} else {
+		DefaultPreferences.HLSAudio = &MP3
+	}
+
+	if loaded.RestreamAudio != nil {
+		switch *loaded.RestreamAudio {
+		case AudioBest:
+			fmt.Println(`"best" audio preset has been deprecated, please change it in your config. Interpreting it as "aac"`)
+			DefaultPreferences.RestreamAudio = &AAC
+		case AudioOpus:
+			fmt.Println(`"opus" audio preset has been deprecated, please change it in your config. Interpreting it as "aac_lq"`)
+			DefaultPreferences.RestreamAudio = &AACLQ
+		default:
+			DefaultPreferences.RestreamAudio = loaded.RestreamAudio
+		}
+	} else {
+		DefaultPreferences.RestreamAudio = &MP3
+	}
+
+	if loaded.ProgressiveAudio != nil {
+		DefaultPreferences.ProgressiveAudio = loaded.ProgressiveAudio
+	} else {
+		DefaultPreferences.ProgressiveAudio = &MP3
+	}
+
+	if loaded.DownloadAudio != nil {
+		switch *loaded.DownloadAudio {
+		case AudioBest:
+			fmt.Println(`"best" audio preset has been deprecated, please change it in your config. Interpreting it as "aac"`)
+			DefaultPreferences.DownloadAudio = &AAC
+		case AudioOpus:
+			fmt.Println(`"opus" audio preset has been deprecated, please change it in your config. Interpreting it as "aac_lq"`)
+			DefaultPreferences.DownloadAudio = &AACLQ
+		default:
+			DefaultPreferences.DownloadAudio = loaded.RestreamAudio
+		}
+	} else {
+		DefaultPreferences.DownloadAudio = &MP3
+	}
+
+	if loaded.ShowAudio != nil {
+		DefaultPreferences.ShowAudio = loaded.ShowAudio
+	} else {
+		DefaultPreferences.ShowAudio = &False
+	}
+
+	if loaded.SearchSuggestions != nil {
+		DefaultPreferences.SearchSuggestions = loaded.SearchSuggestions
+	} else {
+		DefaultPreferences.SearchSuggestions = &False
+	}
+
+	if loaded.KeepPlayerFocus != nil {
+		DefaultPreferences.KeepPlayerFocus = loaded.KeepPlayerFocus
+	} else {
+		DefaultPreferences.KeepPlayerFocus = &False
+	}
+
+	if loaded.Waveform != nil {
+		DefaultPreferences.Waveform = loaded.Waveform
+	} else {
+		DefaultPreferences.Waveform = &True
+	}
+
+	if loaded.DRM != nil {
+		DefaultPreferences.DRM = loaded.DRM
+	} else {
+		DefaultPreferences.DRM = &False
+	}
+}
+
+func boolean(in string) bool {
+	return strings.Trim(strings.ToLower(in), " ") == "true"
+}
+
+func fromEnv() error {
+	env := os.Getenv("GET_WEB_PROFILES")
+	if env != "" {
+		GetWebProfiles = boolean(env)
+	}
+
+	env = os.Getenv("DEFAULT_PREFERENCES")
+	if env != "" {
+		var p Preferences
+		err := json.Unmarshal(S2b(env), &p)
+		if err != nil {
+			return err
+		}
+
+		loadDefaultPreferences(p)
+	} else {
+		defaultPreferences()
+	}
+
+	env = os.Getenv("PROXY_IMAGES")
+	if env != "" {
+		ProxyImages = boolean(env)
+	}
+
+	env = os.Getenv("PROXY_STREAMS")
+	if env != "" {
+		ProxyStreams = boolean(env)
+	}
+
+	env = os.Getenv("RESTREAM")
+	if env != "" {
+		Restream = boolean(env)
+	}
+
+	env = os.Getenv("RESTREAM_CACHE_CONTROL")
+	if env != "" {
+		RestreamCacheControl = env
+	}
+
+	env = os.Getenv("INSTANCE_INFO")
+	if env != "" {
+		InstanceInfo = boolean(env)
+	}
+
+	env = os.Getenv("CLIENT_ID_TTL")
+	if env != "" {
+		num, err := strconv.ParseInt(env, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		ClientIDTTL = time.Duration(num) * time.Second
+	}
+
+	env = os.Getenv("USER_TTL")
+	if env != "" {
+		num, err := strconv.ParseInt(env, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		UserTTL = time.Duration(num) * time.Second
+	}
+
+	env = os.Getenv("USER_CACHE_CLEAN_DELAY")
+	if env != "" {
+		num, err := strconv.ParseInt(env, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		UserCacheCleanDelay = time.Duration(num) * time.Second
+	}
+
+	env = os.Getenv("TRACK_TTL")
+	if env != "" {
+		num, err := strconv.ParseInt(env, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		TrackTTL = time.Duration(num) * time.Second
+	}
+
+	env = os.Getenv("TRACK_CACHE_CLEAN_DELAY")
+	if env != "" {
+		num, err := strconv.ParseInt(env, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		TrackCacheCleanDelay = time.Duration(num) * time.Second
+	}
+
+	env = os.Getenv("PLAYLIST_TTL")
+	if env != "" {
+		num, err := strconv.ParseInt(env, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		PlaylistTTL = time.Duration(num) * time.Second
+	}
+
+	env = os.Getenv("PLAYLIST_CACHE_CLEAN_DELAY")
+	if env != "" {
+		num, err := strconv.ParseInt(env, 10, 64)
+		if err != nil {
+			return err
+		}
+
+		PlaylistCacheCleanDelay = time.Duration(num) * time.Second
+	}
+
+	env = os.Getenv("USER_AGENT")
+	if env != "" {
+		UserAgent = env
+	}
+
+	env = os.Getenv("CLIENT_ID")
+	if env != "" {
+		ClientID = env
+	}
+
+	env = os.Getenv("ENABLE_API")
+	if env != "" {
+		EnableAPI = boolean(env)
+	}
+
+	env = os.Getenv("SOUNDCLOUD_API_PROXY")
+	if env != "" {
+		SoundcloudApiProxy = env
+	}
+
+	env = os.Getenv("DIAL_DUAL_STACK")
+	if env != "" {
+		DialDualStack = boolean(env)
+	}
+
+	env = os.Getenv("SPOOF_TLS")
+	if env != "" {
+		SpoofTLS = boolean(env)
+	}
+
+	env = os.Getenv("ACCOUNT_TOKENS")
+	if env != "" {
+		var p []string
+		err := json.Unmarshal(S2b(env), &p)
+		if err != nil {
+			return err
+		}
+
+		AccountTokens = p
+	}
+
+	env = os.Getenv("USE_TOKENS_IN_API")
+	if env != "" {
+		UseTokensInAPI = boolean(env)
+	}
+
+	env = os.Getenv("NETWORK")
+	if env != "" {
+		Network = env
+	}
+
+	env = os.Getenv("ADDR")
+	if env != "" {
+		Addr = env
+	}
+
+	env = os.Getenv("UNIX_SOCKET_PERMS")
+	if env != "" {
+		p, err := strconv.ParseUint(env, 0, 32)
+		if err != nil {
+			return err
+		}
+
+		UnixSocketPerms = os.FileMode(p)
+	}
+
+	env = os.Getenv("PREFORK")
+	if env != "" {
+		Prefork = boolean(env)
+	}
+
+	env = os.Getenv("TRUSTED_PROXY_CHECK")
+	if env != "" {
+		TrustedProxyCheck = boolean(env)
+	}
+
+	env = os.Getenv("TRUSTED_PROXIES")
+	if env != "" {
+		var p []string
+		err := json.Unmarshal(S2b(env), &p)
+		if err != nil {
+			return err
+		}
+
+		TrustedProxies = p
+	}
+
+	env = os.Getenv("CODEGEN_CONFIG")
+	if env != "" {
+		CodegenConfig = boolean(env)
+	}
+
+	env = os.Getenv("EMBED_FILES")
+	if env != "" {
+		EmbedFiles = boolean(env)
+	}
+
+	return nil
+}
+
+func init() {
+	filename := "soundcloak.json"
+	if env := os.Getenv("SOUNDCLOAK_CONFIG"); env == "FROM_ENV" {
+		err := fromEnv()
+		if err != nil {
+			log.Println("Warning: failed to load config from environment:", err)
+			defaultPreferences()
+		}
+
+		return
+	} else if env != "" {
+		filename = env
+	}
+
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		log.Printf("Warning: failed to load config from %s: %s\n", filename, err)
+		defaultPreferences()
+		return
+	}
+
+	var config struct {
+		GetWebProfiles          *bool
+		DefaultPreferences      *Preferences
+		ProxyImages             *bool
+		ProxyStreams            *bool
+		Restream                *bool
+		RestreamCacheControl    *string
+		InstanceInfo            *bool
+		ClientIDTTL             *time.Duration
+		UserTTL                 *time.Duration
+		UserCacheCleanDelay     *time.Duration
+		TrackTTL                *time.Duration
+		TrackCacheCleanDelay    *time.Duration
+		PlaylistTTL             *time.Duration
+		PlaylistCacheCleanDelay *time.Duration
+		UserAgent               *string
+		ClientID                *string
+		DNSCacheTTL             *time.Duration
+		EnableAPI               *bool
+		SoundcloudApiProxy      *string
+		DialDualStack           *bool
+		SpoofTLS                *bool
+		AccountTokens           *[]string
+		UseTokensInAPI          *bool
+		Network                 *string
+		Addr                    *string
+		UnixSocketPerms         *string
+		Prefork                 *bool
+		TrustedProxyCheck       *bool
+		TrustedProxies          *[]string
+		CodegenConfig           *bool
+		EmbedFiles              *bool
+	}
+
+	err = json.Unmarshal(data, &config)
+	if err != nil {
+		log.Printf("failed to parse config from %s: %s\n", filename, err)
+		defaultPreferences()
+		return
+	}
+
+	// tedious
+	// i've decided to fully override to make it easier to change default config later on
+	if config.GetWebProfiles != nil {
+		GetWebProfiles = *config.GetWebProfiles
+	}
+	if config.ProxyImages != nil {
+		ProxyImages = *config.ProxyImages
+	}
+	if config.ProxyStreams != nil {
+		ProxyStreams = *config.ProxyStreams
+	}
+	if config.Restream != nil {
+		Restream = *config.Restream
+	}
+	if config.RestreamCacheControl != nil {
+		RestreamCacheControl = *config.RestreamCacheControl
+	}
+	if config.InstanceInfo != nil {
+		InstanceInfo = *config.InstanceInfo
+	}
+	if config.ClientIDTTL != nil {
+		ClientIDTTL = *config.ClientIDTTL * time.Second
+	}
+	if config.UserTTL != nil {
+		UserTTL = *config.UserTTL * time.Second
+	}
+	if config.UserCacheCleanDelay != nil {
+		UserCacheCleanDelay = *config.UserCacheCleanDelay * time.Second
+	}
+	if config.TrackTTL != nil {
+		TrackTTL = *config.TrackTTL * time.Second
+	}
+	if config.TrackCacheCleanDelay != nil {
+		TrackCacheCleanDelay = *config.TrackCacheCleanDelay * time.Second
+	}
+	if config.PlaylistTTL != nil {
+		PlaylistTTL = *config.PlaylistTTL * time.Second
+	}
+	if config.PlaylistCacheCleanDelay != nil {
+		PlaylistCacheCleanDelay = *config.PlaylistCacheCleanDelay * time.Second
+	}
+	if config.UserAgent != nil {
+		UserAgent = *config.UserAgent
+	}
+	if config.ClientID != nil {
+		ClientID = *config.ClientID
+	}
+	if config.EnableAPI != nil {
+		EnableAPI = *config.EnableAPI
+	}
+	if config.SoundcloudApiProxy != nil {
+		SoundcloudApiProxy = *config.SoundcloudApiProxy
+	}
+	if config.DialDualStack != nil {
+		DialDualStack = *config.DialDualStack
+	}
+	if config.SpoofTLS != nil {
+		SpoofTLS = *config.SpoofTLS
+	}
+	if config.AccountTokens != nil {
+		AccountTokens = *config.AccountTokens
+	}
+	if config.UseTokensInAPI != nil {
+		UseTokensInAPI = *config.UseTokensInAPI
+	}
+	if config.Network != nil {
+		Network = *config.Network
+	}
+	if config.Addr != nil {
+		Addr = *config.Addr
+	}
+	if config.UnixSocketPerms != nil {
+		p, err := strconv.ParseUint(*config.UnixSocketPerms, 0, 32)
+		if err != nil {
+			log.Println("failed to parse UnixSocketPerms:", err)
+		} else {
+			UnixSocketPerms = os.FileMode(p)
+		}
+	}
+	if config.Prefork != nil {
+		Prefork = *config.Prefork
+	}
+	if config.TrustedProxyCheck != nil {
+		TrustedProxyCheck = *config.TrustedProxyCheck
+	}
+	if config.TrustedProxies != nil {
+		TrustedProxies = *config.TrustedProxies
+	}
+	if config.CodegenConfig != nil {
+		CodegenConfig = *config.CodegenConfig
+	}
+	if config.EmbedFiles != nil {
+		EmbedFiles = *config.EmbedFiles
+	}
+
+	if config.DefaultPreferences != nil {
+		loadDefaultPreferences(*config.DefaultPreferences)
+	} else {
+		defaultPreferences()
+	}
+}
+
+const Debug = false

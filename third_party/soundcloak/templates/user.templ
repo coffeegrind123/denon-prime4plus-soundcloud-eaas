@@ -1,0 +1,315 @@
+package templates
+
+import (
+	"git.maid.zone/stuff/soundcloak/lib/cfg"
+	"git.maid.zone/stuff/soundcloak/lib/misc"
+	"git.maid.zone/stuff/soundcloak/lib/sc"
+	"net/url"
+	"strconv"
+)
+
+templ UserHeader(u sc.User) {
+	<meta name="og:site_name" content="soundcloak"/>
+	<meta name="og:title" content={ u.FormatUsername() }/>
+	<meta name="og:description" content={ u.FormatDescription() }/>
+	<meta name="og:image" content={ u.Avatar }/>
+	<link rel="icon" type="image/x-icon" href={ u.Avatar }/>
+}
+
+templ UserItem(user *sc.User) {
+	<a class="listing" href={ templ.SafeURL("/" + user.Permalink) }>
+		<img
+			loading="lazy"
+			fetchpriority="low"
+			if user.Avatar != "" {
+				src={ user.Avatar }
+			} else {
+				src="/_/static/placeholder.jpg"
+			}
+		/>
+		<div class="meta">
+			<h3>{ user.Username }</h3>
+			if user.FullName != "" {
+				<span>{ user.FullName }</span>
+			}
+		</div>
+	</a>
+}
+
+templ UserLinks(links []sc.Link) {
+	for _, link := range links {
+		if len(link.URL) > 0 {
+			<p>
+				<a
+					class="link"
+					if link.URL[0] == '/' {
+						href={ templ.SafeURL(link.URL) }
+					} else {
+						href={ templ.URL(link.URL) }
+						referrerpolicy="no-referrer"
+						rel="external nofollow noopener noreferrer"
+						target="_blank"
+					}
+				>- { link.Title }</a>
+			</p>
+		}
+	}
+}
+
+templ UserBase(prefs cfg.Preferences, u sc.User) {
+	<div class="hero-section">
+		if u.Avatar != "" {
+			<img src={ u.Avatar } width="300px"/>
+		}
+		<div>
+			<h1>{ u.Username }</h1>
+			if u.FullName != "" {
+				<h2>{ u.FullName }</h2>
+			}
+			if u.Verified {
+				<p style="color: var(--accent)">Verified</p>
+			}
+			<hr/>
+			<p><a class="link" href={ templ.SafeURL("/" + u.Permalink + "/followers") }><span title={ u.Followers }>{ misc.HumanizeNumber(u.Followers) }</span> followers</a></p>
+			<p><a class="link" href={ templ.SafeURL("/" + u.Permalink + "/following") }><span title={ u.Following }>{ misc.HumanizeNumber(u.Following) }</span> followings</a></p>
+			<p><a class="link" href={ templ.SafeURL("/" + u.Permalink + "/likes") }><span title={ u.Liked }>{ misc.HumanizeNumber(u.Liked) }</span> liked</a></p>
+		</div>
+	</div>
+	if len(u.WebProfiles) != 0 {
+		@Description(prefs, u.Description, UserLinks(u.WebProfiles))
+	} else {
+		@Description(prefs, u.Description, nil)
+	}
+	<div>
+		<dl>
+			<dt>Tracks</dt>
+			<dd>{ strconv.FormatInt(u.Tracks, 10) }</dd>
+			<dt>Playlists and albums</dt>
+			<dd>{ strconv.FormatInt(u.Playlists, 10) }</dd>
+			if u.CreatedAt != "" {
+				<dt>Created</dt>
+				<dd>{ misc.TryFormatRfc3339(u.CreatedAt) }</dd>
+			}
+			<dt>Last modified</dt>
+			<dd>{ misc.TryFormatRfc3339(u.LastModified) }</dd>
+		</dl>
+	</div>
+}
+
+type btn struct {
+	text     string
+	href     string
+	override bool
+	external bool
+}
+
+templ UserButtons(current string, user sc.User) {
+	<div class="btns">
+		//       this part is the tedious one now, because formatting breaks if i space the list out with newlines
+		for _, b := range [...]btn{{"tracks", "", false, false},{"popular tracks", "/popular-tracks", false, false},{"playlists", "/sets", false, false},{"albums", "/albums", false, false},{"reposts","/reposts", false, false},{"related", "/_/related", false, false},{"user station", "/discover/sets/"+user.Station, true, false},{"rss feed", "/_/rss/"+user.Permalink, true, false},{"view on soundcloud", "https://soundcloud.com/"+user.Permalink, true, true}} {
+			<a
+				if b.text == current {
+					class="btn active"
+				} else {
+					class="btn"
+					if b.override {
+						href={ templ.SafeURL(b.href) }
+					} else {
+						href={ templ.SafeURL("/" + user.Permalink + b.href) }
+					}
+					if b.external {
+						referrerpolicy="no-referrer"
+						rel="external nofollow noopener noreferrer"
+						target="_blank"
+					}
+				}
+			>
+				{ b.text }
+			</a>
+		}
+	</div>
+}
+
+templ User(prefs cfg.Preferences, u sc.User, p *sc.Paginated[*sc.Track]) {
+	@UserBase(prefs, u)
+	// kinda tedious but whatever, might make it more flexible in the future
+	// ^ outdated, no longer tedious but whatever
+	@UserButtons("tracks", u)
+	<br/>
+	if len(p.Collection) != 0 {
+		<div>
+			for _, track := range p.Collection {
+				@TrackItem(track, false, "")
+			}
+		</div>
+		if p.NextHref != "" && len(p.Collection) != int(u.Tracks) {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/users/")+len(u.ID)+len("/tracks?"):])) } rel="noreferrer">more tracks</a>
+		}
+	} else {
+		<span>no more tracks</span>
+	}
+}
+
+templ UserPlaylists(prefs cfg.Preferences, u sc.User, p *sc.Paginated[*sc.Playlist]) {
+	@UserBase(prefs, u)
+	@UserButtons("playlists", u)
+	<br/>
+	if len(p.Collection) != 0 {
+		<div>
+			for _, playlist := range p.Collection {
+				@PlaylistItem(playlist, false)
+			}
+		</div>
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/users/")+len(u.ID)+len("/playlists_without_albums?"):])) } rel="noreferrer">more playlists</a>
+		}
+	} else {
+		<span>no more playlists</span>
+	}
+}
+
+templ UserAlbums(prefs cfg.Preferences, u sc.User, p *sc.Paginated[*sc.Playlist]) {
+	@UserBase(prefs, u)
+	@UserButtons("albums", u)
+	<br/>
+	if len(p.Collection) != 0 {
+		<div>
+			for _, playlist := range p.Collection {
+				@PlaylistItem(playlist, false)
+			}
+		</div>
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/users/")+len(u.ID)+len("/albums?"):])) } rel="noreferrer">more albums</a>
+		}
+	} else {
+		<span>no more albums</span>
+	}
+}
+
+templ UserReposts(prefs cfg.Preferences, u sc.User, p *sc.Paginated[*sc.Repost]) {
+	@UserBase(prefs, u)
+	@UserButtons("reposts", u)
+	<br/>
+	if len(p.Collection) != 0 {
+		<div>
+			for _, repost := range p.Collection {
+				if repost.Type == sc.TrackRepost && repost.Track != nil {
+					@TrackItem(repost.Track, true, "")
+				} else if repost.Type == sc.PlaylistRepost && repost.Playlist != nil {
+					@PlaylistItem(repost.Playlist, true)
+				}
+			}
+		</div>
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/stream/users/")+len(u.ID)+len("/reposts?"):])) } rel="noreferrer">more reposts</a>
+		}
+	} else {
+		<span>no more reposts</span>
+	}
+}
+
+templ UserLikes(prefs cfg.Preferences, u sc.User, p *sc.Paginated[*sc.Like]) {
+	@UserBase(prefs, u)
+	@UserButtons("", u)
+	<h1>Likes</h1>
+	if len(p.Collection) != 0 {
+		<div>
+			for _, like := range p.Collection {
+				if like.Track != nil {
+					@TrackItem(like.Track, true, "")
+				} else if like.Playlist != nil {
+					@PlaylistItem(like.Playlist, true)
+				}
+			}
+		</div>
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/users/")+len(u.ID)+len("/likes?"):])) } rel="noreferrer">more likes</a>
+		}
+	} else {
+		<span>no more likes</span>
+	}
+}
+
+templ UserRelated(prefs cfg.Preferences, u sc.User, r []*sc.User) {
+	@UserBase(prefs, u)
+	@UserButtons("related", u)
+	<br/>
+	if len(r) != 0 {
+		<div>
+			for _, u := range r {
+				@UserItem(u)
+			}
+		</div>
+	} else {
+		<span>no related users</span>
+	}
+}
+
+templ UserTopTracks(prefs cfg.Preferences, u sc.User, t []*sc.Track) {
+	@UserBase(prefs, u)
+	@UserButtons("popular tracks", u)
+	<br/>
+	if len(t) != 0 {
+		<div>
+			for _, track := range t {
+				@TrackItem(track, false, "")
+			}
+		</div>
+	} else {
+		<span>no popular tracks</span>
+	}
+}
+
+templ UserFollowers(prefs cfg.Preferences, u sc.User, p *sc.Paginated[*sc.User]) {
+	@UserBase(prefs, u)
+	@UserButtons("", u)
+	<h1>Followers</h1>
+	if len(p.Collection) != 0 {
+		<div>
+			for _, user := range p.Collection {
+				@UserItem(user)
+			}
+		</div>
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/users/")+len(u.ID)+len("/followers?"):])) } rel="noreferrer">more users</a>
+		}
+	} else {
+		<span>no more users</span>
+	}
+}
+
+templ UserFollowing(prefs cfg.Preferences, u sc.User, p *sc.Paginated[*sc.User]) {
+	@UserBase(prefs, u)
+	@UserButtons("", u)
+	<h1>Following</h1>
+	if len(p.Collection) != 0 {
+		<div>
+			for _, user := range p.Collection {
+				@UserItem(user)
+			}
+		</div>
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/users/")+len(u.ID)+len("/followings?"):])) } rel="noreferrer">more users</a>
+		}
+	} else {
+		<span>no more users</span>
+	}
+}
+
+templ SearchUsers(p *sc.Paginated[*sc.User], prefs cfg.Preferences, content string) {
+	<span>Found { strconv.FormatInt(p.Total, 10) } users</span>
+	<br/>
+	<br/>
+	if len(p.Collection) == 0 {
+		if p.Total != 0 {
+			<p>no more results</p>
+		}
+	} else {
+		for _, user := range p.Collection {
+			@UserItem(user)
+		}
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?type=users&pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/search/users?"):])) } rel="noreferrer">more users</a>
+		}
+	}
+}

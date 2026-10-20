@@ -1,0 +1,7 @@
+.env
+build/
+cache/
+soundcloud-eaas
+soundcloud-eaas-*
+*.bundle
+*.log

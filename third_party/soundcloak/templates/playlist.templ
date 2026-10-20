@@ -1,0 +1,108 @@
+package templates
+
+import (
+	"git.maid.zone/stuff/soundcloak/lib/cfg"
+	"git.maid.zone/stuff/soundcloak/lib/misc"
+	"git.maid.zone/stuff/soundcloak/lib/sc"
+
+	"net/url"
+	"strconv"
+)
+
+templ PlaylistHeader(p sc.Playlist) {
+	<meta name="og:site_name" content={ p.Author.Username + " ~ soundcloak" }/>
+	<meta name="og:title" content={ p.Title }/>
+	<meta name="og:description" content={ p.FormatDescription() }/>
+	<meta name="og:image" content={ p.Artwork }/>
+	<link rel="icon" type="image/x-icon" href={ p.Artwork }/>
+}
+
+func playlist(t sc.Track, p sc.Playlist) string {
+	return t.Href() + "?playlist=" + p.Href()[1:]
+}
+
+templ PlaylistItem(playlist *sc.Playlist, showUsername bool) {
+	<a class="listing" href={ templ.SafeURL(playlist.Href()) }>
+		<img
+			loading="lazy"
+			fetchpriority="low"
+			if playlist.Artwork != "" {
+				src={ playlist.Artwork }
+			} else {
+				src="/_/static/placeholder.jpg"
+			}
+		/>
+		<div class="meta">
+			<h3>{ playlist.Title }</h3>
+			if showUsername {
+				<span>{ playlist.Author.Username }</span>
+			}
+			<p>{ strconv.FormatInt(playlist.TracksCount(), 10) } tracks</p>
+		</div>
+	</a>
+}
+
+templ Playlist(prefs cfg.Preferences, p sc.Playlist) {
+	<div class="hero-section">
+		if p.Artwork != "" {
+			<img src={ p.Artwork } width="300px"/>
+		}
+		<div style="width: 100%">
+			<h1>{ p.Title }</h1>
+			@UserItem(&p.Author)
+			<a class="btn" style="width: fit-content" href={ templ.SafeURL("https://soundcloud.com" + p.Href()) }>view on soundcloud</a>
+		</div>
+	</div>
+	<br/>
+	@Description(prefs, p.Description, nil)
+	<dl>
+		<dt>Tracks</dt>
+		<dd>{ strconv.FormatInt(p.TracksCount(), 10) }</dd>
+		if p.TagList != "" {
+			<dt>Tags</dt>
+			<dd>{ sc.TagListParser(p.TagList) }</dd>
+		}
+		if p.CreatedAt != "" {
+			<dt>Created</dt>
+			<dd>{ misc.TryFormatRfc3339(p.CreatedAt) }</dd>
+		}
+		<dt>Last modified</dt>
+		<dd>{ misc.TryFormatRfc3339(p.LastModified) }</dd>
+		<dt>Likes</dt>
+		<dd>{ misc.HumanizeNumber(p.Likes) }</dd>
+		<dt>Reposts</dt>
+		<dd>{ misc.HumanizeNumber(p.Reposts) }</dd>
+	</dl>
+	<br/>
+	<br/>
+	<div>
+		for _, track := range p.Tracks {
+			if *prefs.AutoplayNextTrack {
+				@TrackItem(&track, true, playlist(track, p))
+			} else {
+				@TrackItem(&track, true, "")
+			}
+		}
+	</div>
+	if len(p.MissingTracks) != 0 {
+		<a class="btn" href={ templ.SafeURL("?pagination=" + url.QueryEscape(p.MissingTracks)) } rel="noreferrer">more tracks</a>
+	}
+}
+
+templ SearchPlaylists(p *sc.Paginated[*sc.Playlist], prefs cfg.Preferences, content string) {
+	<span>Found { strconv.FormatInt(p.Total, 10) } playlists</span>
+	<br/>
+	<br/>
+	if len(p.Collection) == 0 {
+		if p.Total != 0 {
+			<p>no more results</p>
+		}
+	} else {
+		for _, playlist := range p.Collection {
+			@PlaylistItem(playlist, true)
+		}
+		if p.NextHref != "" && len(p.Collection) != int(p.Total) {
+			<a class="btn" href={ templ.SafeURL("?type=playlists&pagination=" + url.QueryEscape(p.NextHref[sc.H+len("/search/playlists?"):])) } rel="noreferrer">more playlists</a>
+		}
+	}
+}

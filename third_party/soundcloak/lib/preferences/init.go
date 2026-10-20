@@ -1,0 +1,393 @@
+package preferences
+
+import (
+	"context"
+	"time"
+
+	encodingjson "encoding/json"
+
+	"github.com/goccy/go-json"
+	"github.com/valyala/fasthttp"
+
+	"git.maid.zone/stuff/soundcloak/lib/cfg"
+	"git.maid.zone/stuff/soundcloak/templates"
+	"github.com/gofiber/fiber/v3"
+)
+
+const on = "on"
+
+// apply defaults + migration code
+func Defaults(dst *cfg.Preferences) {
+	if dst.Player == nil {
+		dst.Player = cfg.DefaultPreferences.Player
+	}
+
+	if dst.ProxyStreams == nil {
+		dst.ProxyStreams = cfg.DefaultPreferences.ProxyStreams
+	}
+
+	if dst.FullyPreloadTrack == nil {
+		dst.FullyPreloadTrack = cfg.DefaultPreferences.FullyPreloadTrack
+	}
+
+	if dst.ProxyImages == nil {
+		dst.ProxyImages = cfg.DefaultPreferences.ProxyImages
+	}
+
+	if dst.ParseDescriptions == nil {
+		dst.ParseDescriptions = cfg.DefaultPreferences.ParseDescriptions
+	}
+
+	if dst.AutoplayNextTrack == nil {
+		dst.AutoplayNextTrack = cfg.DefaultPreferences.AutoplayNextTrack
+	}
+
+	if dst.AutoplayNextRelatedTrack == nil {
+		dst.AutoplayNextRelatedTrack = cfg.DefaultPreferences.AutoplayNextRelatedTrack
+	}
+
+	if dst.DefaultAutoplayMode == nil {
+		dst.DefaultAutoplayMode = cfg.DefaultPreferences.DefaultAutoplayMode
+	}
+
+	// THE GREAT OPUS MIGRATION
+	if dst.HLSAudio == nil {
+		dst.HLSAudio = cfg.DefaultPreferences.HLSAudio
+	} else {
+		switch *dst.HLSAudio {
+		case cfg.AudioOpus:
+			dst.HLSAudio = &cfg.AACLQ
+		case cfg.AudioBest:
+			dst.HLSAudio = &cfg.AAC
+		}
+	}
+
+	// they removed ogg/opus encodings from every single track, there is nothing anywhere
+	if dst.RestreamAudio == nil {
+		dst.RestreamAudio = cfg.DefaultPreferences.RestreamAudio
+	} else {
+		switch *dst.RestreamAudio {
+		case cfg.AudioOpus:
+			dst.RestreamAudio = &cfg.AACLQ
+		case cfg.AudioBest:
+			dst.RestreamAudio = &cfg.AAC
+		}
+	}
+
+	if dst.ProgressiveAudio == nil {
+		dst.ProgressiveAudio = cfg.DefaultPreferences.ProgressiveAudio
+	}
+
+	// only remains mp3 and aac
+	if dst.DownloadAudio == nil {
+		dst.DownloadAudio = cfg.DefaultPreferences.DownloadAudio
+	} else {
+		switch *dst.DownloadAudio {
+		case cfg.AudioOpus:
+			dst.DownloadAudio = &cfg.AACLQ
+		case cfg.AudioBest:
+			dst.DownloadAudio = &cfg.AAC
+		}
+	}
+
+	if dst.ShowAudio == nil {
+		dst.ShowAudio = cfg.DefaultPreferences.ShowAudio
+	}
+
+	if dst.SearchSuggestions == nil {
+		dst.SearchSuggestions = cfg.DefaultPreferences.SearchSuggestions
+	}
+
+	if dst.KeepPlayerFocus == nil {
+		dst.KeepPlayerFocus = cfg.DefaultPreferences.KeepPlayerFocus
+	}
+
+	if dst.Waveform == nil {
+		dst.Waveform = cfg.DefaultPreferences.Waveform
+	}
+
+	if dst.DRM == nil {
+		dst.DRM = cfg.DefaultPreferences.DRM
+	}
+}
+
+// handrolled cookie parser
+// because fasthttp version 1.72.0 won't parse cookies with " ; \
+// https://github.com/valyala/fasthttp/commit/eb82c9a13addbe488f69cbf530444bb2561fd083
+func Get(c fiber.Ctx) (p cfg.Preferences, err error) {
+	b := c.Request().Header.Peek("Cookie")
+	if len(b) != 0 {
+		isKey := true
+		k := 0
+		for i, v := range b {
+			if v == '=' && isKey {
+				isKey = false
+				for b[k] == ' ' {
+					k++
+				}
+				if string(b[k:i]) == "prefs" {
+					i++
+					end := len(b)
+					for j, c := range b[i:] {
+						if c == ';' {
+							end = j + i
+							break
+						}
+					}
+					err = json.Unmarshal(b[i:end], &p)
+					if err != nil {
+						return
+					}
+					break
+				}
+			} else if v == ';' {
+				isKey = true
+				k = i + 1
+			}
+		}
+	}
+	Defaults(&p)
+	return
+}
+
+type PrefsForm struct {
+	ProxyImages              string
+	ParseDescriptions        string
+	Player                   string
+	ProxyStreams             string
+	FullyPreloadTrack        string
+	AutoplayNextTrack        string
+	AutoplayNextRelatedTrack string
+	DefaultAutoplayMode      string
+	HLSAudio                 string
+	RestreamAudio            string
+	ProgressiveAudio         string
+	DownloadAudio            string
+	ShowAudio                string
+	SearchSuggestions        string
+	KeepPlayerFocus          string
+	Waveform                 string
+	DRM                      string
+	AutoAudio                string
+}
+
+type Export struct {
+	Preferences *cfg.Preferences `json:",omitempty"`
+}
+
+func setPrefs(c fiber.Ctx, p *cfg.Preferences) error {
+	data, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+
+	cookie := fasthttp.AcquireCookie()
+	cookie.SetKey("prefs")
+	cookie.SetValueBytes(data)
+	cookie.SetExpire(time.Now().Add(400 * 24 * time.Hour))
+	cookie.SetHTTPOnly(true)
+	cookie.SetSameSite(fasthttp.CookieSameSiteStrictMode)
+	cookie.SetPath("/")
+	c.Response().Header.SetCookie(cookie)
+	fasthttp.ReleaseCookie(cookie)
+
+	return nil
+}
+
+func Load(r *fiber.App) {
+	r.Get("/_/preferences", func(c fiber.Ctx) error {
+		p, err := Get(c)
+		if err != nil {
+			return err
+		}
+
+		c.Response().Header.SetContentType("text/html")
+		return templates.Base(p, "preferences", templates.Preferences(p), nil, templates.HeaderOptions{}).Render(context.Background(), c)
+	})
+
+	r.Post("/_/preferences", func(c fiber.Ctx) error {
+		var p PrefsForm
+		err := c.Bind().Form(&p)
+		if err != nil {
+			return err
+		}
+
+		old, err := Get(c)
+		if err != nil {
+			return err
+		}
+
+		if *old.AutoplayNextTrack {
+			old.DefaultAutoplayMode = &p.DefaultAutoplayMode
+		}
+
+		if p.AutoplayNextTrack == on {
+			old.AutoplayNextTrack = &cfg.True
+		} else {
+			old.AutoplayNextTrack = &cfg.False
+		}
+
+		if p.AutoplayNextRelatedTrack == on {
+			old.AutoplayNextRelatedTrack = &cfg.True
+		} else {
+			old.AutoplayNextRelatedTrack = &cfg.False
+		}
+
+		if p.ShowAudio == on {
+			old.ShowAudio = &cfg.True
+		} else {
+			old.ShowAudio = &cfg.False
+		}
+
+		if *old.Player != cfg.RestreamPlayer {
+			switch p.ProxyStreams {
+			case on:
+				old.ProxyStreams = &cfg.True
+			case "":
+				old.ProxyStreams = &cfg.False
+			}
+		}
+
+		if *old.Player == cfg.HLSPlayer || *old.Player == cfg.AutoPlayer {
+			if p.FullyPreloadTrack == on {
+				old.FullyPreloadTrack = &cfg.True
+			} else {
+				old.FullyPreloadTrack = &cfg.False
+			}
+
+			if p.DRM == on {
+				old.DRM = &cfg.True
+			} else {
+				old.DRM = &cfg.False
+			}
+		}
+
+		if cfg.Restream {
+			old.DownloadAudio = &p.DownloadAudio
+		}
+
+		switch *old.Player {
+		case cfg.HLSPlayer:
+			old.HLSAudio = &p.HLSAudio
+		case cfg.ProgressivePlayer:
+			old.ProgressiveAudio = &p.ProgressiveAudio
+		case cfg.RestreamPlayer:
+			old.RestreamAudio = &p.RestreamAudio
+		case cfg.AutoPlayer:
+			old.HLSAudio = &p.AutoAudio
+			old.RestreamAudio = &p.AutoAudio
+			switch p.AutoAudio {
+			case cfg.AudioAACHQ, cfg.AudioMP3:
+				old.ProgressiveAudio = &p.AutoAudio
+			default:
+				if len(cfg.AccountTokens) != 0 && p.AutoAudio == cfg.AudioAAC {
+					old.ProgressiveAudio = &p.AutoAudio
+				} else {
+					old.ProgressiveAudio = &cfg.MP3
+				}
+			}
+		}
+
+		if cfg.ProxyImages {
+			if p.ProxyImages == on {
+				old.ProxyImages = &cfg.True
+			} else {
+				old.ProxyImages = &cfg.False
+			}
+		}
+
+		if p.ParseDescriptions == on {
+			old.ParseDescriptions = &cfg.True
+		} else {
+			old.ParseDescriptions = &cfg.False
+		}
+
+		if p.SearchSuggestions == on {
+			old.SearchSuggestions = &cfg.True
+		} else {
+			old.SearchSuggestions = &cfg.False
+		}
+
+		if p.KeepPlayerFocus == on {
+			old.KeepPlayerFocus = &cfg.True
+		} else {
+			old.KeepPlayerFocus = &cfg.False
+		}
+
+		if p.Waveform == on {
+			old.Waveform = &cfg.True
+		} else {
+			old.Waveform = &cfg.False
+		}
+
+		old.Player = &p.Player
+
+		setPrefs(c, &old)
+
+		return c.Redirect().To("/_/preferences")
+	})
+
+	r.Get("/_/preferences/reset", func(c fiber.Ctx) error {
+		// do not use (fiber.Ctx).Cookie() ts pmo icl
+
+		cookie := fasthttp.AcquireCookie()
+		cookie.SetKey("prefs")
+		cookie.SetValue("{}")
+		cookie.SetExpire(time.Now().Add(400 * 24 * time.Hour))
+		cookie.SetHTTPOnly(true)
+		cookie.SetSameSite(fasthttp.CookieSameSiteLaxMode)
+		cookie.SetPath("/")
+		c.Response().Header.SetCookie(cookie)
+		fasthttp.ReleaseCookie(cookie)
+
+		return c.Redirect().To("/_/preferences")
+	})
+
+	r.Get("/_/preferences/export", func(c fiber.Ctx) error {
+		p, err := Get(c)
+		if err != nil {
+			return err
+		}
+
+		data, err := encodingjson.Marshal(Export{Preferences: &p})
+		if err != nil {
+			return err
+		}
+
+		c.Response().Header.SetContentType("application/json")
+
+		return c.Send(data)
+		// go-json seems to crash for this one :p
+	})
+
+	r.Post("/_/preferences/import", func(c fiber.Ctx) error {
+		f, err := c.FormFile("prefs")
+		if err != nil {
+			return err
+		}
+
+		fd, err := f.Open()
+		if err != nil {
+			return err
+		}
+		defer fd.Close()
+
+		dec := json.NewDecoder(fd)
+
+		var p Export
+		err = dec.Decode(&p)
+		if err != nil {
+			return err
+		}
+
+		if p.Preferences == nil {
+			p.Preferences = &cfg.Preferences{}
+		}
+
+		Defaults(p.Preferences)
+
+		setPrefs(c, p.Preferences)
+
+		return c.Redirect().To("/_/preferences")
+	})
+}
