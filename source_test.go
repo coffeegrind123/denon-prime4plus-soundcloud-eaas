@@ -33,3 +33,9 @@ func TestPlaylistMetadata(t *testing.T) {
 		t.Fatalf("track count = %d", metadata.GetTrackCount())
 	}
 }
+
+func TestTrackBlobPathIncludesExtension(t *testing.T) {
+	if got := trackBlobPath("123", "m4a"); got != `<C:\SoundCloud\123.m4a>` {
+		t.Fatalf("blob path = %q", got)
+	}
+}

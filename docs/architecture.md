@@ -51,7 +51,7 @@ returns one response with up to `--max-feed-items` chronological entries.
 an Engine path such as:
 
 ```text
-<C:\SoundCloud\<track-id>>
+<C:\SoundCloud\<track-id>.<extension>>
 ```
 
 The HTTP server parses the track ID from that path.

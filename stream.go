@@ -57,6 +57,7 @@ func (s *source) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing track id", http.StatusBadRequest)
 		return
 	}
+	log.Printf("download track=%s range=%q", id, r.Header.Get("Range"))
 
 	stream, err := s.resolveStream(id)
 	if err != nil {
@@ -66,7 +67,13 @@ func (s *source) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if stream.protocol == sc.ProtocolProgressive {
-		s.proxyStream(w, r, stream.url)
+		file, err := s.materializeProgressive(id, stream)
+		if err != nil {
+			log.Printf("materialize progressive %s: %v", id, err)
+			http.Error(w, "stream unavailable", http.StatusBadGateway)
+			return
+		}
+		http.ServeFile(w, r, file)
 		return
 	}
 
@@ -77,6 +84,109 @@ func (s *source) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeFile(w, r, file)
+}
+
+func (s *source) prepareTrack(id string) (uint32, string, error) {
+	stream, err := s.resolveStream(id)
+	if err != nil {
+		return 0, "", err
+	}
+	extension := stream.ext
+	if extension == "" {
+		if stream.protocol == sc.ProtocolProgressive {
+			extension = "mp3"
+		} else {
+			extension = "m4a"
+		}
+	}
+	if stream.protocol == sc.ProtocolProgressive {
+		info, err := s.progressiveSize(stream.url)
+		if err == nil && info > 0 {
+			return info, extension, nil
+		}
+		file, err := s.materializeProgressive(id, stream)
+		if err != nil {
+			return 0, "", err
+		}
+		stat, err := os.Stat(file)
+		if err != nil {
+			return 0, "", err
+		}
+		return uint32(stat.Size()), extension, nil
+	}
+
+	file, err := s.materializeHLS(id, stream)
+	if err != nil {
+		return 0, "", err
+	}
+	stat, err := os.Stat(file)
+	if err != nil {
+		return 0, "", err
+	}
+	return uint32(stat.Size()), extension, nil
+}
+
+func (s *source) progressiveSize(target string) (uint32, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, target, nil)
+	if err != nil {
+		return 0, err
+	}
+	response, err := s.httpClient.Do(request)
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 400 {
+		return 0, fmt.Errorf("HEAD status %d", response.StatusCode)
+	}
+	if response.ContentLength <= 0 || response.ContentLength > int64(^uint32(0)) {
+		return 0, fmt.Errorf("invalid content length")
+	}
+	return uint32(response.ContentLength), nil
+}
+
+func (s *source) materializeProgressive(id string, stream resolvedStream) (string, error) {
+	lock := s.streamLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	extension := stream.ext
+	if extension == "" {
+		extension = "mp3"
+	}
+	destination := filepath.Join(s.cacheDir, id+"."+extension)
+	if info, err := os.Stat(destination); err == nil && info.Size() > 0 {
+		return destination, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	temporary := destination + ".part"
+	output, err := os.Create(temporary)
+	if err != nil {
+		return "", err
+	}
+	if err := s.copyURL(ctx, output, stream.url); err != nil {
+		_ = output.Close()
+		_ = os.Remove(temporary)
+		return "", err
+	}
+	if err := output.Sync(); err != nil {
+		_ = output.Close()
+		_ = os.Remove(temporary)
+		return "", err
+	}
+	if err := output.Close(); err != nil {
+		_ = os.Remove(temporary)
+		return "", err
+	}
+	if err := os.Rename(temporary, destination); err != nil {
+		return "", err
+	}
+	log.Printf("cached progressive track %s (%s)", id, destination)
+	return destination, nil
 }
 
 func (s *source) resolveStream(id string) (resolvedStream, error) {
@@ -104,37 +214,6 @@ func (s *source) resolveStream(id string) (resolvedStream, error) {
 		protocol: selected.Format.Protocol,
 		ext:      selected.ToExt(),
 	}, nil
-}
-
-func (s *source) proxyStream(w http.ResponseWriter, r *http.Request, target string) {
-	request, err := http.NewRequestWithContext(r.Context(), r.Method, target, nil)
-	if err != nil {
-		http.Error(w, "bad upstream request", http.StatusBadGateway)
-		return
-	}
-	for _, header := range []string{"Range", "If-Range"} {
-		if value := r.Header.Get(header); value != "" {
-			request.Header.Set(header, value)
-		}
-	}
-	response, err := s.httpClient.Do(request)
-	if err != nil {
-		http.Error(w, "upstream unavailable", http.StatusBadGateway)
-		return
-	}
-	defer response.Body.Close()
-
-	for _, header := range []string{
-		"Accept-Ranges", "Content-Length", "Content-Range", "Content-Type", "ETag", "Last-Modified",
-	} {
-		if value := response.Header.Get(header); value != "" {
-			w.Header().Set(header, value)
-		}
-	}
-	w.WriteHeader(response.StatusCode)
-	if r.Method != http.MethodHead {
-		_, _ = io.Copy(w, response.Body)
-	}
 }
 
 func (s *source) materializeHLS(id string, stream resolvedStream) (string, error) {

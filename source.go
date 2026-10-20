@@ -494,9 +494,15 @@ func (s *source) GetTrack(_ context.Context, req *enginelibrary.GetTrackRequest)
 	if err != nil {
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
-	url := fmt.Sprintf("<C:\\SoundCloud\\%s>", string(track.ID))
-	size := uint32(0)
+	size, extension, err := s.prepareTrack(string(track.ID))
+	if err != nil {
+		log.Printf("GetTrack prepare %s: %v", track.ID, err)
+		return nil, status.Error(codes.Unavailable, "track stream unavailable")
+	}
+	url := trackBlobPath(string(track.ID), extension)
 	metadata := metadataForTrack(track)
+	unset := -1.0
+	log.Printf("GetTrack prepared track=%s size=%d path=%s", track.ID, size, url)
 	return &enginelibrary.GetTrackResponse{
 		Blob: &enginelibrary.TrackBlob{
 			Type: &enginelibrary.TrackBlob_Url{
@@ -505,6 +511,10 @@ func (s *source) GetTrack(_ context.Context, req *enginelibrary.GetTrackRequest)
 		},
 		PerformanceData: &enginelibrary.TrackPerformanceData{
 			Bpm: metadata.Bpm,
+			MainCue: &enginelibrary.MainCue{
+				Position:        &unset,
+				InitialPosition: &unset,
+			},
 		},
 		Metadata: metadata,
 	}, nil
@@ -557,6 +567,10 @@ func truncate(value string, max int) string {
 		return value
 	}
 	return value[:max]
+}
+
+func trackBlobPath(id, extension string) string {
+	return fmt.Sprintf("<C:\\SoundCloud\\%s.%s>", id, extension)
 }
 
 func (s *source) streamTracks(stream grpc.ServerStreamingServer[enginelibrary.GetTracksResponse], tracks []sc.Track) error {
