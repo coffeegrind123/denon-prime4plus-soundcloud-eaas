@@ -40,9 +40,9 @@ playlists.
 Profile data observed through the public API:
 
 ```text
-tracks=140
-likes=48960
-playlists=21
+tracks=<configured profile track count>
+likes=<configured profile like count>
+playlists=<configured profile playlist count>
 ```
 
 The live list response contained embedded artwork for the first 50 items and
