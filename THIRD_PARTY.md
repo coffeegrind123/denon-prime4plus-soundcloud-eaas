@@ -22,5 +22,7 @@ Commit: `a834f2e2d74b05fb687f5ce31abc8945a24a4d69`
 
 Vendored Markdown was refreshed to match the checked-in defaults, preference
 fields, audio preset fallback order, and TLS defaults.
+`lib/sc.User.GetPlaylistLikes` was added for SoundCloud's dedicated
+`/users/<id>/playlist_likes` feed.
 
 See `third_party/soundcloak/LICENSE`.

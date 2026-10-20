@@ -12,7 +12,7 @@ Device and protocol research is documented separately in the
 
 ## Verified target
 
-- Source release `v0.2.6`
+- Source release `v0.2.7`
 - Denon DJ Prime 4+ (`JC11S`)
 - Engine OS 4.3.4
 - ARMv7 hard-float userland

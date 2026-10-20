@@ -15,9 +15,12 @@ import (
 
 func main() {
 	address := flag.String("address", "192.168.4.39:50010", "EaaS gRPC address")
+	trackID := flag.String("track-id", "", "Prepare one track and exit")
+	playlistID := flag.String("playlist-id", "", "List one playlist and exit")
+	timeout := flag.Duration("timeout", 15*time.Second, "RPC timeout")
 	flag.Parse()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
 	connection, err := grpc.NewClient(*address, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -26,6 +29,43 @@ func main() {
 	}
 	defer connection.Close()
 	client := enginelibrary.NewEngineLibraryServiceClient(connection)
+
+	if *trackID != "" {
+		result, err := client.GetTrack(ctx, &enginelibrary.GetTrackRequest{
+			LibraryId: stringPtr("soundcloud-source"),
+			TrackId:   trackID,
+		})
+		if err != nil {
+			log.Fatal("GetTrack: ", err)
+		}
+		fmt.Printf("stream=%q size=%d\n",
+			result.GetBlob().GetUrl().GetUrl(),
+			result.GetBlob().GetUrl().GetFileSize())
+		return
+	}
+	if *playlistID != "" {
+		playlistStream, err := client.GetTracks(ctx, &enginelibrary.GetTracksRequest{
+			LibraryId:  stringPtr("soundcloud-source"),
+			PlaylistId: playlistID,
+			PageSize:   uint32Ptr(200),
+		})
+		if err != nil {
+			log.Fatal("GetTracks: ", err)
+		}
+		var count int
+		for {
+			response, err := playlistStream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Fatal("GetTracks recv: ", err)
+			}
+			count += len(response.GetTracks())
+		}
+		fmt.Printf("playlist=%q tracks=%d\n", *playlistID, count)
+		return
+	}
 
 	libraries, err := client.GetLibraries(ctx, &enginelibrary.GetLibrariesRequest{})
 	if err != nil {
@@ -42,8 +82,7 @@ func main() {
 	}
 	fmt.Printf("playlists=%d\n", len(library.GetPlaylists()))
 	for _, playlist := range library.GetPlaylists() {
-		fmt.Printf("root id=%q title=%q count=%d children=%d\n",
-			playlist.GetId(), playlist.GetTitle(), playlist.GetTrackCount(), len(playlist.GetPlaylists()))
+		printPlaylist(playlist, "root", 0)
 	}
 
 	tracksStream, err := client.GetTracks(ctx, &enginelibrary.GetTracksRequest{
@@ -83,6 +122,23 @@ func main() {
 			}
 			fmt.Printf("stream=%q size=%d\n", result.GetBlob().GetUrl().GetUrl(), result.GetBlob().GetUrl().GetFileSize())
 		}
+	}
+}
+
+func printPlaylist(playlist *enginelibrary.PlaylistMetadata, kind string, depth int) {
+	indent := ""
+	for range depth {
+		indent += "  "
+	}
+	fmt.Printf("%s%s id=%q title=%q count=%d children=%d\n",
+		indent, kind, playlist.GetId(), playlist.GetTitle(),
+		playlist.GetTrackCount(), len(playlist.GetPlaylists()))
+	for i, child := range playlist.GetPlaylists() {
+		if i >= 20 {
+			fmt.Printf("%s  ... %d more\n", indent, len(playlist.GetPlaylists())-i)
+			break
+		}
+		printPlaylist(child, "child", depth+1)
 	}
 }
 

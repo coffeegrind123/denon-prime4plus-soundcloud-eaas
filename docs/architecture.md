@@ -81,6 +81,14 @@ cap, and oldest-completed-first eviction. Each response length reserves budget
 before copying; free space is checked during the copy. Partial files are
 removed on errors or startup.
 
+Engine applies a short deadline to `GetTrack`. For HLS, `GetTrack` now fetches
+the playlist, resolves every segment length with concurrent `HEAD` requests,
+returns the exact total size, and starts materialization in the background.
+Segment bodies download in bounded parallel batches. If no cache exists when
+HTTP `/download` arrives, the handler waits for that materialization. Once a
+slot is acquired, copying also uses a separate 15-minute bounded context so it
+cannot inherit a canceled RPC.
+
 Only public, non-DRM transcodings are exposed. Encrypted HLS formats are
 rejected rather than passed to Engine's Widevine path.
 

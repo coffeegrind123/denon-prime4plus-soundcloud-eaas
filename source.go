@@ -46,10 +46,11 @@ type source struct {
 	tracks         map[string]sc.Track
 	userPlaylists  map[string]sc.Playlist
 	likedPlaylists map[string]sc.Playlist
-	recentLiked    []sc.Playlist
+	likedOrder     []sc.Playlist
 	playlistOrder  []string
 	artwork        map[string][]byte
 	streamLocks    map[string]*sync.Mutex
+	prefetching    map[string]bool
 }
 
 func newSource(profile, display, hostIP, cacheDir string, feedMax int, cacheMax, cacheMin int64) (*source, error) {
@@ -75,6 +76,7 @@ func newSource(profile, display, hostIP, cacheDir string, feedMax int, cacheMax,
 		likedPlaylists: map[string]sc.Playlist{},
 		artwork:        map[string][]byte{},
 		streamLocks:    map[string]*sync.Mutex{},
+		prefetching:    map[string]bool{},
 	}
 
 	playlists, err := user.GetPlaylists(cfg.DefaultPreferences, "limit=50&linked_partitioning=1")
@@ -84,7 +86,7 @@ func newSource(profile, display, hostIP, cacheDir string, feedMax int, cacheMax,
 		for {
 			for _, playlist := range playlists.Collection {
 				s.cachePlaylist(*playlist)
-				s.playlistOrder = append(s.playlistOrder, playlist.Permalink)
+				s.playlistOrder = append(s.playlistOrder, playlistKey(*playlist))
 			}
 			if playlists.NextHref == "" {
 				break
@@ -96,18 +98,26 @@ func newSource(profile, display, hostIP, cacheDir string, feedMax int, cacheMax,
 		}
 	}
 
-	likes, err := user.GetLikes(cfg.DefaultPreferences, "limit=50&linked_partitioning=1")
+	likes, err := user.GetPlaylistLikes(cfg.DefaultPreferences, "limit=50&linked_partitioning=1")
 	if err != nil {
 		log.Printf("load liked playlists: %v", err)
 	} else {
-		for _, like := range likes.Collection {
-			if like.Playlist == nil {
-				continue
+		for {
+			for _, like := range likes.Collection {
+				if like.Playlist == nil {
+					continue
+				}
+				playlist := like.Playlist
+				s.cachePlaylist(*playlist)
+				s.likedPlaylists[playlistKey(*playlist)] = *playlist
+				s.likedOrder = append(s.likedOrder, *playlist)
 			}
-			s.cachePlaylist(*like.Playlist)
-			s.likedPlaylists[like.Playlist.Permalink] = *like.Playlist
-			if len(s.recentLiked) < 20 {
-				s.recentLiked = append(s.recentLiked, *like.Playlist)
+			if likes.NextHref == "" {
+				break
+			}
+			if err := likes.Proceed(true); err != nil {
+				log.Printf("load liked playlists page: %v", err)
+				break
 			}
 		}
 	}
@@ -118,7 +128,11 @@ func newSource(profile, display, hostIP, cacheDir string, feedMax int, cacheMax,
 func (s *source) cachePlaylist(playlist sc.Playlist) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.userPlaylists[playlist.Permalink] = playlist
+	s.userPlaylists[playlistKey(playlist)] = playlist
+}
+
+func playlistKey(playlist sc.Playlist) string {
+	return playlist.Author.Permalink + "/" + playlist.Permalink
 }
 
 func (s *source) cacheTrack(track sc.Track) {
@@ -163,12 +177,12 @@ func (s *source) rootMetadata() *enginelibrary.PlaylistMetadata {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	likedChildren := make([]*enginelibrary.PlaylistMetadata, 0, 2+len(s.recentLiked))
+	likedChildren := make([]*enginelibrary.PlaylistMetadata, 0, 2+len(s.likedOrder))
 	likedChildren = append(likedChildren,
 		playlistMetadata(likedTracksID, "Liked Tracks", uint32(s.user.Liked)),
 	)
-	likedPlaylistChildren := make([]*enginelibrary.PlaylistMetadata, 0, len(s.recentLiked))
-	for _, playlist := range s.recentLiked {
+	likedPlaylistChildren := make([]*enginelibrary.PlaylistMetadata, 0, len(s.likedOrder))
+	for _, playlist := range s.likedOrder {
 		likedPlaylistChildren = append(likedPlaylistChildren,
 			s.playlistMetadataLocked(playlist),
 		)
@@ -218,7 +232,7 @@ func playlistMetadata(id, title string, count uint32) *enginelibrary.PlaylistMet
 }
 
 func (s *source) playlistMetadataLocked(playlist sc.Playlist) *enginelibrary.PlaylistMetadata {
-	id := "sc-playlist:" + playlist.Permalink
+	id := "sc-playlist:" + playlistKey(playlist)
 	return playlistMetadata(id, playlist.Title, uint32(playlist.TrackCount))
 }
 
@@ -340,10 +354,13 @@ func (s *source) fetchPlaylist(id string, limit int) ([]sc.Track, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown SoundCloud playlist %s", id)
 	}
-	path := s.profile + "/sets/" + playlist.Permalink
 	if playlist.Permalink == "" {
 		return nil, fmt.Errorf("playlist %s has no permalink", id)
 	}
+	if playlist.Author.Permalink == "" {
+		return nil, fmt.Errorf("playlist %s has no author", id)
+	}
+	path := playlist.Author.Permalink + "/sets/" + playlist.Permalink
 	resolved, err := sc.GetPlaylist(path)
 	if err != nil {
 		return nil, err

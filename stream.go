@@ -28,6 +28,19 @@ type resolvedStream struct {
 	ext      string
 }
 
+type hlsPlan struct {
+	playlist *hlsPlaylist
+	urls     []string
+	sizes    []int64
+	total    int64
+}
+
+const mediaMaterializeTimeout = 15 * time.Minute
+
+func mediaMaterializeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), mediaMaterializeTimeout)
+}
+
 func (s *source) httpHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
@@ -79,7 +92,7 @@ func (s *source) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, err := s.materializeHLS(r.Context(), id, stream)
+	file, err := s.materializeHLS(r.Context(), id, stream, nil)
 	if err != nil {
 		log.Printf("materialize HLS %s: %v", id, err)
 		http.Error(w, "stream unavailable", http.StatusBadGateway)
@@ -101,24 +114,97 @@ func (s *source) prepareTrack(ctx context.Context, id string) (uint32, string, e
 			extension = "m4a"
 		}
 	}
-	var file *os.File
-	if stream.protocol == sc.ProtocolProgressive {
-		file, err = s.materializeProgressive(ctx, id, stream)
-	} else {
-		file, err = s.materializeHLS(ctx, id, stream)
+
+	destination := filepath.Join(s.cache.dir, id+"."+extension)
+	if info, ok, err := s.cachedMediaInfo(destination); ok || err != nil {
+		if err != nil {
+			return 0, "", err
+		}
+		size, err := mediaSize(info.Size())
+		return size, extension, err
 	}
-	if err != nil {
-		return 0, "", err
+
+	var size int64
+	var plan *hlsPlan
+	if stream.protocol == sc.ProtocolProgressive {
+		size, err = s.remoteSize(ctx, stream.url)
+	} else {
+		plan, err = s.planHLS(ctx, stream.url)
+		if err == nil {
+			size = plan.total
+		}
+	}
+	if err == nil {
+		s.startPrefetch(id, stream, plan)
+		size32, err := mediaSize(size)
+		return size32, extension, err
+	}
+
+	file, materializeErr := s.materialize(ctx, id, stream, plan)
+	if materializeErr != nil {
+		return 0, "", materializeErr
 	}
 	defer file.Close()
-	stat, err := file.Stat()
+	info, statErr := file.Stat()
+	if statErr != nil {
+		return 0, "", statErr
+	}
+	size32, err := mediaSize(info.Size())
+	return size32, extension, err
+}
+
+func (s *source) materialize(ctx context.Context, id string, stream resolvedStream, plan *hlsPlan) (*os.File, error) {
+	if stream.protocol == sc.ProtocolProgressive {
+		return s.materializeProgressive(ctx, id, stream)
+	}
+	return s.materializeHLS(ctx, id, stream, plan)
+}
+
+func (s *source) cachedMediaInfo(path string) (os.FileInfo, bool, error) {
+	file, ok, err := s.openCachedMedia(path)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
-		return 0, "", err
+		return nil, false, err
 	}
-	if stat.Size() <= 0 || stat.Size() > int64(^uint32(0)) {
-		return 0, "", fmt.Errorf("invalid cached media size %d", stat.Size())
+	return info, true, nil
+}
+
+func mediaSize(size int64) (uint32, error) {
+	if size <= 0 || size > int64(^uint32(0)) {
+		return 0, fmt.Errorf("invalid cached media size %d", size)
 	}
-	return uint32(stat.Size()), extension, nil
+	return uint32(size), nil
+}
+
+func (s *source) startPrefetch(id string, stream resolvedStream, plan *hlsPlan) {
+	s.mu.Lock()
+	if s.prefetching == nil {
+		s.prefetching = map[string]bool{}
+	}
+	if s.prefetching[id] {
+		s.mu.Unlock()
+		return
+	}
+	s.prefetching[id] = true
+	s.mu.Unlock()
+
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			delete(s.prefetching, id)
+			s.mu.Unlock()
+		}()
+		file, err := s.materialize(context.Background(), id, stream, plan)
+		if err != nil {
+			log.Printf("prefetch %s: %v", id, err)
+			return
+		}
+		_ = file.Close()
+	}()
 }
 
 func (s *source) materializeProgressive(ctx context.Context, id string, stream resolvedStream) (*os.File, error) {
@@ -132,6 +218,9 @@ func (s *source) materializeProgressive(ctx context.Context, id string, stream r
 	}
 	destination := filepath.Join(s.cache.dir, id+"."+extension)
 
+	if file, ok, err := s.openCachedMedia(destination); ok || err != nil {
+		return file, err
+	}
 	if err := s.cache.beginDownload(ctx); err != nil {
 		return nil, err
 	}
@@ -141,7 +230,7 @@ func (s *source) materializeProgressive(ctx context.Context, id string, stream r
 		return file, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := mediaMaterializeContext(ctx)
 	defer cancel()
 	temporary := destination + ".part"
 	output, err := os.Create(temporary)
@@ -204,7 +293,114 @@ func (s *source) resolveStream(id string) (resolvedStream, error) {
 	}, nil
 }
 
-func (s *source) materializeHLS(ctx context.Context, id string, stream resolvedStream) (*os.File, error) {
+func (s *source) loadHLSPlaylist(ctx context.Context, target string) (*hlsPlaylist, error) {
+	data, err := s.fetch(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	playlist := newHLSPlaylist(target)
+	if err := playlist.parse(data); err != nil {
+		return nil, err
+	}
+	return playlist, nil
+}
+
+func (s *source) remoteSize(ctx context.Context, target string) (int64, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, target, nil)
+	if err != nil {
+		return 0, err
+	}
+	response, err := s.httpClient.Do(request)
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
+		return 0, fmt.Errorf("HEAD %s: status %d", target, response.StatusCode)
+	}
+	if response.ContentLength <= 0 {
+		return 0, fmt.Errorf("HEAD %s: missing content length", target)
+	}
+	return response.ContentLength, nil
+}
+
+func (s *source) hlsSize(ctx context.Context, target string) (int64, error) {
+	plan, err := s.planHLS(ctx, target)
+	if err != nil {
+		return 0, err
+	}
+	return plan.total, nil
+}
+
+func (s *source) planHLS(ctx context.Context, target string) (*hlsPlan, error) {
+	playlist, err := s.loadHLSPlaylist(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	urls := make([]string, 0, len(playlist.segments)+1)
+	if playlist.initialization != "" {
+		urls = append(urls, playlist.initialization)
+	}
+	urls = append(urls, playlist.segments...)
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("HLS playlist has no media")
+	}
+
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	workers := min(16, len(urls))
+	jobs := make(chan int)
+	sizes := make([]int64, len(urls))
+	var wait sync.WaitGroup
+	var firstErr error
+	var errOnce sync.Once
+	for range workers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for index := range jobs {
+				size, err := s.remoteSize(workerCtx, urls[index])
+				if err != nil {
+					errOnce.Do(func() {
+						firstErr = err
+						cancel()
+					})
+					continue
+				}
+				sizes[index] = size
+			}
+		}()
+	}
+sending:
+	for index := range urls {
+		select {
+		case jobs <- index:
+		case <-workerCtx.Done():
+			break sending
+		}
+	}
+	close(jobs)
+	wait.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	var total int64
+	for _, size := range sizes {
+		if size <= 0 || total > int64(^uint32(0))-size {
+			return nil, fmt.Errorf("invalid HLS media size")
+		}
+		total += size
+	}
+	return &hlsPlan{
+		playlist: playlist,
+		urls:     urls,
+		sizes:    sizes,
+		total:    total,
+	}, nil
+}
+
+func (s *source) materializeHLS(ctx context.Context, id string, stream resolvedStream, plan *hlsPlan) (*os.File, error) {
 	lock := s.streamLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -215,6 +411,9 @@ func (s *source) materializeHLS(ctx context.Context, id string, stream resolvedS
 	}
 	destination := filepath.Join(s.cache.dir, id+"."+extension)
 
+	if file, ok, err := s.openCachedMedia(destination); ok || err != nil {
+		return file, err
+	}
 	if err := s.cache.beginDownload(ctx); err != nil {
 		return nil, err
 	}
@@ -224,15 +423,17 @@ func (s *source) materializeHLS(ctx context.Context, id string, stream resolvedS
 		return file, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := mediaMaterializeContext(ctx)
 	defer cancel()
 
-	playlist, err := s.fetch(ctx, stream.url)
-	if err != nil {
-		return nil, err
+	if plan == nil {
+		loadedPlan, loadErr := s.planHLS(ctx, stream.url)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		plan = loadedPlan
 	}
-	parser := newHLSPlaylist(stream.url)
-	if err := parser.parse(playlist); err != nil {
+	if err := s.cache.ensure(plan.total); err != nil {
 		return nil, err
 	}
 
@@ -244,25 +445,51 @@ func (s *source) materializeHLS(ctx context.Context, id string, stream resolvedS
 	defer output.Close()
 	var written int64
 
-	if parser.initialization != "" {
-		n, err := s.copyURLLimited(ctx, output, parser.initialization, s.cache.maxBytes)
-		written += n
+	const (
+		maxBatchItems = 8
+		maxBatchBytes = 32 << 20
+	)
+	for start := 0; start < len(plan.urls); {
+		end := start
+		var batchBytes int64
+		for end < len(plan.urls) && end-start < maxBatchItems {
+			size := plan.sizes[end]
+			if size > maxBatchBytes {
+				_ = os.Remove(temporary)
+				return nil, fmt.Errorf("HLS segment is too large: %d", size)
+			}
+			if end > start && batchBytes+size > maxBatchBytes {
+				break
+			}
+			batchBytes += size
+			end++
+		}
+		buffers, err := s.downloadMediaBatch(ctx, plan.urls[start:end], plan.sizes[start:end])
 		if err != nil {
 			_ = os.Remove(temporary)
 			return nil, err
 		}
-	}
-	for _, segment := range parser.segments {
-		n, err := s.copyURLLimited(ctx, output, segment, s.cache.maxBytes)
-		written += n
-		if err != nil {
-			_ = os.Remove(temporary)
-			return nil, err
+		for _, data := range buffers {
+			available, err := freeBytes(s.cache.dir)
+			if err != nil {
+				_ = os.Remove(temporary)
+				return nil, err
+			}
+			if available < s.cache.minFreeBytes || int64(len(data)) > available-s.cache.minFreeBytes {
+				_ = os.Remove(temporary)
+				return nil, fmt.Errorf("%w: free=%d minimum=%d", errCacheLimit, available, s.cache.minFreeBytes)
+			}
+			if err := writeAll(output, data); err != nil {
+				_ = os.Remove(temporary)
+				return nil, err
+			}
+			written += int64(len(data))
 		}
+		start = end
 	}
-	if written == 0 {
+	if written != plan.total {
 		_ = os.Remove(temporary)
-		return nil, fmt.Errorf("HLS media is empty")
+		return nil, fmt.Errorf("HLS size mismatch: wrote=%d expected=%d", written, plan.total)
 	}
 	if err := output.Sync(); err != nil {
 		_ = os.Remove(temporary)
@@ -425,6 +652,80 @@ func (s *source) copyURLLimited(ctx context.Context, output io.Writer, target st
 			return written, readErr
 		}
 	}
+}
+
+func (s *source) downloadMediaBatch(ctx context.Context, urls []string, sizes []int64) ([][]byte, error) {
+	buffers := make([][]byte, len(urls))
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wait sync.WaitGroup
+	var firstErr error
+	var errOnce sync.Once
+	for index := range urls {
+		index := index
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			data, err := s.downloadMediaBytes(workerCtx, urls[index], sizes[index])
+			if err != nil {
+				errOnce.Do(func() {
+					firstErr = err
+					cancel()
+				})
+				return
+			}
+			buffers[index] = data
+		}()
+	}
+	wait.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return buffers, nil
+}
+
+func (s *source) downloadMediaBytes(ctx context.Context, target string, expected int64) ([]byte, error) {
+	if expected <= 0 || expected > 32<<20 {
+		return nil, fmt.Errorf("invalid media segment size %d", expected)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := s.httpClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("segment %s: status %d", target, response.StatusCode)
+	}
+	if response.ContentLength > 0 && response.ContentLength != expected {
+		return nil, fmt.Errorf("segment %s: length changed from %d to %d", target, expected, response.ContentLength)
+	}
+	if encoding := response.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		return nil, fmt.Errorf("segment %s: unexpected encoding %q", target, encoding)
+	}
+
+	data := make([]byte, int(expected))
+	if _, err := io.ReadFull(response.Body, data); err != nil {
+		return nil, fmt.Errorf("segment %s: %w", target, err)
+	}
+	var extra [1]byte
+	for {
+		n, err := response.Body.Read(extra[:])
+		if n != 0 {
+			return nil, fmt.Errorf("segment %s: response exceeds content length", target)
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
 }
 
 func writeAll(output io.Writer, data []byte) error {

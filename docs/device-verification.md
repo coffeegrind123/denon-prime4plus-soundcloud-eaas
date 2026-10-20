@@ -35,6 +35,16 @@ The UI loaded `Likes`, displayed artwork and metadata, and double-tapping a row
 opened the Load Track deck selector. Loading the first track caused `GetTrack`
 and a local `/download` request without an Engine format error.
 
+Some slower HLS tracks initially failed after Engine canceled `GetTrack` at its
+five-second deadline. Concurrent segment-length probes now let `GetTrack`
+return the exact size immediately, while bounded parallel downloads populate
+the cache. A controlled five-second client timeout returned successfully for
+a previously uncached track; the cache completed about two seconds later.
+
+An uncached track was then loaded through the hardware UI directly. Engine
+issued `processGetTrack`, `/download`, and OfflineAnalyzer without a deadline
+or download error.
+
 The cache contained one numeric fragmented MP4 file after the first load.
 `/data` remained at 5.4 GiB free. The HTTP endpoint rejected a non-local test
 client with 403.
@@ -63,6 +73,10 @@ Playlists
 `Likes` displayed artwork, title, artist, and duration. `Reposts` loaded a
 200-entry feed without an Engine error. `Playlists` listed all public
 playlists.
+
+`Liked Playlists` now uses the dedicated playlist-likes feed and renders its
+playlist hierarchy in the hardware UI. Selecting a liked playlist issued
+`GetTracks` for its author-qualified ID and loaded its tracks.
 
 ## Metadata
 

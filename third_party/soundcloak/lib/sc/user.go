@@ -304,6 +304,21 @@ func (u User) GetLikes(prefs cfg.Preferences, args string) (*Paginated[*Like], e
 	return &p, nil
 }
 
+func (u User) GetPlaylistLikes(prefs cfg.Preferences, args string) (*Paginated[*Like], error) {
+	p := Paginated[*Like]{Next: u.baseUri("playlist_likes", args)}
+
+	err := p.Proceed(true)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, like := range p.Collection {
+		like.Fix(prefs)
+	}
+
+	return &p, nil
+}
+
 func (u *User) GetWebProfiles() error {
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)

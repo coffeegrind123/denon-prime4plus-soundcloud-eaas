@@ -27,11 +27,13 @@ endpoint and matched back by ID, not by response order.
 
 ```text
 GET /users/<id>/likes
+GET /users/<id>/playlist_likes
 GET /stream/users/<id>/reposts
 ```
 
 Pagination is opaque. Follow `next_href`; do not synthesize offsets. Likes
-contain either `.track` or `.playlist`.
+contain either `.track` or `.playlist`. Use `playlist_likes` for the complete
+liked-playlist feed instead of scanning the mixed likes feed.
 
 ## Streams
 

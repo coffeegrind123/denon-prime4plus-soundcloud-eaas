@@ -23,7 +23,7 @@ import (
 
 const (
 	softwareName = "SoundCloud EaaS"
-	softwareVer  = "0.2.6"
+	softwareVer  = "0.2.7"
 )
 
 func main() {

@@ -39,3 +39,39 @@ func TestTrackBlobPathIncludesExtension(t *testing.T) {
 		t.Fatalf("blob path = %q", got)
 	}
 }
+
+func TestRootMetadataIncludesLikedPlaylists(t *testing.T) {
+	source := &source{
+		user:           sc.User{Liked: 10},
+		userPlaylists:  map[string]sc.Playlist{},
+		likedPlaylists: map[string]sc.Playlist{},
+		likedOrder: []sc.Playlist{{
+			Permalink:  "liked-list",
+			Title:      "Liked List",
+			TrackCount: 3,
+		}},
+	}
+	root := source.rootMetadata()
+	if len(root.Playlists) != 4 {
+		t.Fatalf("root playlists = %d", len(root.Playlists))
+	}
+	likes := root.Playlists[1]
+	if len(likes.Playlists) != 2 || likes.Playlists[1].GetId() != likedPlaylistsID {
+		t.Fatalf("liked groups = %+v", likes.Playlists)
+	}
+	liked := likes.Playlists[1]
+	if len(liked.Playlists) != 1 || liked.Playlists[0].GetTitle() != "Liked List" {
+		t.Fatalf("liked playlists = %+v", liked.Playlists)
+	}
+}
+
+func TestPlaylistKeyIncludesAuthor(t *testing.T) {
+	first := sc.Playlist{Permalink: "same-name"}
+	first.Author.Permalink = "first-author"
+	second := sc.Playlist{Permalink: "same-name"}
+	second.Author.Permalink = "second-author"
+
+	if playlistKey(first) == playlistKey(second) {
+		t.Fatal("playlists from different authors collided")
+	}
+}
