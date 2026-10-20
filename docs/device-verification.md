@@ -81,6 +81,13 @@ The first bytes are a valid fragmented MP4 (`ftyp iso5`, followed by `moov`).
 
 ## Issues found and fixed
 
+* Engine rejected blob paths ending in a numeric ID with `eassapi: Invalid
+  Track format`. The path must include the resolved media extension, for
+  example `<C:\SoundCloud\<track-id>.m4a>`.
+* A zero `TrackBlobUrl.file_size` is not accepted. `GetTrack` now resolves or
+  materializes the stream first and returns its actual size.
+* The performance-data message needs `MainCue` coordinates. Unset positions are
+  sent as `-1`.
 * Docker host networking allowed TCP but not inbound UDP; published ports
   fixed discovery.
 * The stock `go-stagelinq` generated service did not match Engine's embedded
