@@ -15,13 +15,19 @@ without SoundCloud pairing, a Go+ subscription, or Widevine.
 
 ## Run
 
-The beacon must advertise an address the player can reach, so set the Docker
-host's LAN address:
+Set the public profile permalink and the Docker host's LAN address:
 
 ```sh
 cp .env.example .env
 $EDITOR .env
 docker compose up -d --build
+```
+
+Required values:
+
+```text
+SC_PROFILE=<public-profile-permalink>
+SC_EAAS_HOST_IP=<host-lan-ip>
 ```
 
 The required ports are TCP 50010 and 50020, plus UDP 11224. Published ports
